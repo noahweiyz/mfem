@@ -12,10 +12,11 @@
 
 using namespace mfem;
 
-using InterpolationPair = std::pair<Array<double>, Array<double>>;
-
-using InterpolationPairTensor =
-   std::pair<DeviceTensor<2, const double>, DeviceTensor<3, const double>>;
+struct DofToQuadTensors
+{
+   DeviceTensor<2, const double> B;
+   DeviceTensor<3, const double> G;
+};
 
 using Field =
    std::pair<std::variant<const GridFunction *, const ParGridFunction *>,
@@ -57,10 +58,10 @@ int GetDimension(const Field &f)
 class FieldDescriptor
 {
 public:
-   enum InterpolationType { VALUE, GRADIENT, CURL } interpolation;
+   enum Interpolation { NONE, WEIGHTS, VALUE, GRADIENT, CURL } interpolation;
 
-   FieldDescriptor(InterpolationType interp, std::string name)
-      : interpolation(interp), name(name) {}
+   FieldDescriptor(Interpolation interp, std::string name, int size_on_qp = -1)
+      : interpolation(interp), name(name), size_on_qp(size_on_qp) {}
 
    std::string name;
 
@@ -75,13 +76,19 @@ public:
       os << fd.name << " ";
       switch (fd.interpolation)
       {
-         case InterpolationType::VALUE:
+         case Interpolation::NONE:
+            os << "none";
+            break;
+         case Interpolation::WEIGHTS:
+            os << "weights";
+            break;
+         case Interpolation::VALUE:
             os << "value";
             break;
-         case InterpolationType::GRADIENT:
+         case Interpolation::GRADIENT:
             os << "gradient";
             break;
-         case InterpolationType::CURL:
+         case Interpolation::CURL:
             os << "curl";
             break;
       }
@@ -95,14 +102,14 @@ int GetSizeOnQP(const FieldDescriptor &fd, const Field &field)
 {
    switch (fd.interpolation)
    {
-      case FieldDescriptor::InterpolationType::VALUE:
+      case FieldDescriptor::Interpolation::VALUE:
          return GetVDim(field);
          break;
-      case FieldDescriptor::InterpolationType::GRADIENT:
+      case FieldDescriptor::Interpolation::GRADIENT:
          return GetVDim(field) * GetDimension(field);
          break;
       default:
-         MFEM_ABORT("ERROR");
+         MFEM_ABORT("can't get size on quadrature point for field descriptor");
          return -1;
    }
 }
@@ -123,16 +130,21 @@ public:
    T &rho;
 };
 
-template <typename quadrature_function_type> struct QFunction
+template <
+   typename quadrature_function_type,
+   unsigned long num_inputs,
+   unsigned long num_outputs>
+struct QFunction
 {
    quadrature_function_type func;
-   std::vector<FieldDescriptor> inputs;
-   std::vector<FieldDescriptor> outputs;
+   std::array<FieldDescriptor, num_inputs> inputs;
+   std::array<FieldDescriptor, num_outputs> outputs;
 };
 
-template <typename T>
-QFunction(T, std::vector<FieldDescriptor>, std::vector<FieldDescriptor>)
--> QFunction<T>;
+template <typename T, unsigned long num_inputs, unsigned long num_outputs>
+QFunction(T, std::array<FieldDescriptor, num_inputs>,
+          std::array<FieldDescriptor, num_outputs>)
+-> QFunction<T, num_inputs, num_outputs>;
 
 void element_restriction(std::vector<Field> fields, const Vector &x,
                          std::vector<Vector> &fields_e)
@@ -157,7 +169,12 @@ void element_restriction(std::vector<Field> fields, int offset,
 {
    for (int i = 0; i < fields.size(); i++)
    {
-      fields_e[i + offset] = GetGridFunction(fields[i]);
+      auto fes = GetFESpace(fields[i]);
+      const auto R = fes.GetElementRestriction(ElementDofOrdering::NATIVE);
+      const int height = R->Height();
+      fields_e[i + offset].SetSize(height);
+
+      R->Mult(GetGridFunction(fields[i]), fields_e[i + offset]);
    }
 }
 
@@ -196,21 +213,23 @@ void allocate_qf_arg(const FieldDescriptor &input, Vector &arg)
 
 void allocate_qf_arg(const FieldDescriptor &input, DenseMatrix &arg)
 {
-   if (input.interpolation == FieldDescriptor::InterpolationType::GRADIENT)
+   if (input.interpolation == FieldDescriptor::Interpolation::GRADIENT)
    {
       arg.SetSize(input.size_on_qp / input.dim);
    }
 }
 
-template <typename qf_args, std::size_t... i>
-void allocate_qf_args_impl(qf_args &args, std::vector<FieldDescriptor> inputs,
+template <typename qf_args, unsigned long num_inputs, std::size_t... i>
+void allocate_qf_args_impl(qf_args &args,
+                           std::array<FieldDescriptor, num_inputs> inputs,
                            std::index_sequence<i...>)
 {
    (allocate_qf_arg(inputs[i], std::get<i>(args)), ...);
 }
 
-template <typename qf_args>
-void allocate_qf_args(qf_args &args, std::vector<FieldDescriptor> inputs)
+template <typename qf_args, unsigned long num_inputs>
+void allocate_qf_args(qf_args &args,
+                      std::array<FieldDescriptor, num_inputs> inputs)
 {
    allocate_qf_args_impl(args, inputs,
                          std::make_index_sequence<std::tuple_size_v<qf_args>> {});
@@ -272,40 +291,78 @@ auto apply_qf(const qf_type &qf, qf_args &args, std::vector<DeviceTensor<2>> &u,
    return prepare_qf_result(std::apply(qf, args));
 }
 
-void interpolate(const std::vector<Vector> &fields_e,
-                 std::vector<FieldDescriptor> interp,
-                 std::vector<int> qfarg_to_field,
-                 std::vector<InterpolationPairTensor> &dtqmaps,
-                 int el,
-                 std::vector<DeviceTensor<2>> &fields_qp)
+template <unsigned long num_inputs>
+void map_to_quadrature_data(
+   int element_idx,
+   const std::vector<Vector> &fields_e,
+   std::array<FieldDescriptor, num_inputs> qfinputs,
+   std::vector<int> qfarg_to_field,
+   std::vector<DofToQuadTensors> &dtqmaps,
+   DeviceTensor<1, const double> integration_weights,
+   std::vector<DeviceTensor<2>> &fields_qp)
 {
-   std::cout << dtqmaps[qfarg_to_field[0]].first(0, 4) << "\n";
-
-   for (int arg = 0; arg < interp.size(); arg++)
+   for (int arg = 0; arg < qfinputs.size(); arg++)
    {
-      const auto B(dtqmaps[qfarg_to_field[arg]].first);
-      const auto G(dtqmaps[qfarg_to_field[arg]].second);
-
-      auto [num_dof, num_qp] = B.GetShape();
-
-      const auto field = Reshape(fields_e[qfarg_to_field[arg]].Read(),
-                                 interp[arg].size_on_qp, num_dof);
-
-      if (interp[arg].interpolation ==
-          FieldDescriptor::InterpolationType::VALUE)
+      if (qfinputs[arg].interpolation ==
+          FieldDescriptor::Interpolation::VALUE)
       {
-         for (int dof = 0; dof < num_dof; dof++)
+         const auto B(dtqmaps[qfarg_to_field[arg]].B);
+         auto [num_dof, num_qp] = B.GetShape();
+         const int vdim = qfinputs[arg].vdim;
+         const int element_offset = element_idx * num_dof * vdim;
+         const auto field = Reshape(fields_e[qfarg_to_field[arg]].Read() +
+                                    element_offset,
+                                    num_dof, vdim);
+
+         for (int vd = 0; vd < vdim; vd++)
          {
-            for (int vdim = 0; vdim < interp[arg].vdim; vdim++)
+            for (int qp = 0; qp < num_qp; qp++)
             {
-               for (int qp = 0; qp < num_qp; qp++)
+               double acc = 0.0;
+               for (int dof = 0; dof < num_dof; dof++)
                {
-                  double a = fields_qp[arg](vdim, qp);
-                  double b = B(dof, qp);
-                  double c = field(vdim, dof);
-                  // fields_qp[arg](vdim, qp) += B(dof, qp) * field(vdim, dof);
+                  acc += B(qp, dof) * field(dof, vd);
+               }
+               fields_qp[arg](vd, qp) = acc;
+            }
+         }
+      }
+      else if (qfinputs[arg].interpolation ==
+               FieldDescriptor::Interpolation::GRADIENT)
+      {
+         const auto G(dtqmaps[qfarg_to_field[arg]].G);
+         const auto [num_dof, dim, num_qp] = G.GetShape();
+         const int vdim = qfinputs[arg].vdim;
+         const int element_offset = element_idx * num_dof * vdim;
+         const auto field = Reshape(fields_e[qfarg_to_field[arg]].Read() +
+                                    element_offset,
+                                    num_dof, vdim);
+
+         auto f = Reshape(&fields_qp[arg][0], vdim, dim, num_qp);
+         for (int qp = 0; qp < num_qp; qp++)
+         {
+            for (int vd = 0; vd < vdim; vd++)
+            {
+               for (int d = 0; d < dim; d++)
+               {
+                  double acc = 0.0;
+                  for (int dof = 0; dof < num_dof; dof++)
+                  {
+                     acc += G(qp, d, dof) * field(dof, vd);
+                  }
+                  f(vd, d, qp) = acc;
                }
             }
+         }
+      }
+      else if (qfinputs[arg].interpolation ==
+               FieldDescriptor::Interpolation::WEIGHTS)
+      {
+         const int num_qp = integration_weights.GetShape()[0];
+         auto f = Reshape(&fields_qp[arg][0], num_qp);
+         for (int qp = 0; qp < num_qp; qp++)
+         {
+            f(qp) = integration_weights(qp);
          }
       }
    }
@@ -337,69 +394,79 @@ class DifferentiableForm // : public BlockNonlinearForm?
 {
 public:
    DifferentiableForm(std::vector<Field> solutions,
-                      std::vector<Field> parameters)
-      : solutions(solutions), parameters(parameters)
+                      std::vector<Field> parameters,
+                      ParMesh &mesh)
+      : solutions(solutions), parameters(parameters), mesh(mesh)
    {
-      dim = GetFESpace(solutions[0]).GetFE(0)->GetDim();
+      dim = mesh.Dimension();
       fields_e.resize(solutions.size() + parameters.size());
       fields.insert(fields.end(), solutions.begin(), solutions.end());
       fields.insert(fields.end(), parameters.begin(), parameters.end());
    }
 
-   template <typename qf_type>
-   void AddQFunctionIntegrator(QFunction<qf_type> &qf,
+   template <
+      typename qf_type,
+      unsigned long num_inputs,
+      unsigned long num_outputs>
+   void AddQFunctionIntegrator(QFunction<qf_type, num_inputs, num_outputs> &qf,
                                const IntegrationRule &ir)
    {
       std::cout << "adding quadrature function with quadrature rule "
                 << "\n";
 
-      auto it = find_name(solutions, qf.outputs[0].name);
-      if (it != solutions.end())
+      int test_space_field_idx;
+      int residual_size_on_qp;
+
+      if ((test_space_field_idx = find_name_idx(fields, qf.outputs[0].name)) != -1)
       {
          if (test_space == nullptr)
          {
-            test_space = &GetFESpace(*it);
+            test_space = &GetFESpace(solutions[test_space_field_idx]);
          }
-         else if (test_space != &GetFESpace(*it))
+         else if (test_space != &GetFESpace(solutions[test_space_field_idx]))
          {
-            MFEM_ABORT("");
+            MFEM_ABORT("can't add quadrature function with different test space");
          }
-         qf.outputs[0].size_on_qp = GetSizeOnQP(qf.outputs[0], *it);
+         residual_size_on_qp = GetSizeOnQP(qf.outputs[0],
+                                           solutions[test_space_field_idx]);
       }
       else
       {
-         MFEM_ABORT("");
+         if (qf.outputs[0].size_on_qp == -1)
+         {
+            MFEM_ABORT("need to set size on quadrature point for test space that doesn't refer to a field");
+         }
+         residual_size_on_qp = qf.outputs[0].size_on_qp;
       }
 
       std::vector<int> qfarg_to_field(qf.inputs.size());
-      auto found_callback = [&](int i, int idx, Field &f, int offset)
-      {
-         int sz = GetSizeOnQP(qf.inputs[i], f);
-         qf.inputs[i].dim = GetDimension(f);
-         qf.inputs[i].vdim = GetVDim(f);
-         qf.inputs[i].size_on_qp = sz;
-         qfarg_to_field[i] = idx;
-         std::cout << "qf argument " << qf.inputs[i] << " added"
-                   << "\n";
-      };
-
       for (int i = 0; i < qfarg_to_field.size(); i++)
       {
          int idx;
-         if ((idx = find_name_idx(fields, qf.inputs[i].name)) != -1)
+         // TODO: This isn't ideal...
+         if (qf.inputs[i].interpolation == FieldDescriptor::Interpolation::WEIGHTS)
          {
-            found_callback(i, idx, fields[idx], 0);
+            qf.inputs[i].dim = 1;
+            qf.inputs[i].vdim = 1;
+            qf.inputs[i].size_on_qp = 1;
+            qfarg_to_field[i] = -1;
+         }
+         else if ((idx = find_name_idx(fields, qf.inputs[i].name)) != -1)
+         {
+            int sz = GetSizeOnQP(qf.inputs[i], fields[idx]);
+            qf.inputs[i].dim = GetDimension(fields[idx]);
+            qf.inputs[i].vdim = GetVDim(fields[idx]);
+            qf.inputs[i].size_on_qp = sz;
+            qfarg_to_field[i] = idx;
          }
          else
          {
-            MFEM_ABORT("error");
+            MFEM_ABORT("can't find field for " << qf.inputs[i].name);
          }
       }
 
-      const int num_el = test_space->GetNE();
-      const int num_dofs = test_space->GetFE(0)->GetDof();
+      const int num_el = mesh.GetNE();
       const int num_qp = ir.GetNPoints();
-      const int test_vdim = test_space->GetFE(0)->GetVDim();
 
       // Allocate memory for fields on quadrature points
       std::vector<Vector> fields_qp_mem;
@@ -409,11 +476,17 @@ public:
          fields_qp_mem.emplace_back(Vector(s));
       }
 
-      Vector residual_qp_mem(qf.outputs[0].size_on_qp * num_qp * num_el);
-
-      residual_e.SetSize(
-         test_space->GetElementRestriction(ElementDofOrdering::NATIVE)
-         ->Height());
+      Vector residual_qp_mem(residual_size_on_qp * num_qp * num_el);
+      if (test_space)
+      {
+         residual_e.SetSize(
+            test_space->GetElementRestriction(ElementDofOrdering::NATIVE)
+            ->Height());
+      }
+      else
+      {
+         residual_e.SetSize(residual_qp_mem.Size());
+      }
 
       using qf_args = typename create_function_signature<
                       decltype(&qf_type::operator())>::type::parameter_types;
@@ -423,33 +496,33 @@ public:
       qf_args args{};
       allocate_qf_args(args, qf.inputs);
 
+      Array<double> integration_weights_mem = ir.GetWeights();
+
       // Duplicate B/G and assume only a single element type for now
-      std::vector<InterpolationPair> dtqmaps;
+      std::vector<DofToQuad> dtqmaps;
       for (const auto &field : fields)
       {
-         const auto map =
-            GetFESpace(field).GetFE(0)->GetDofToQuad(ir, DofToQuad::FULL);
-         dtqmaps.push_back({map.B, map.G});
+         dtqmaps.emplace_back(GetFESpace(field).GetFE(0)->GetDofToQuad(ir,
+                                                                       DofToQuad::FULL));
       }
 
-      auto r = [&, args, qfarg_to_field, fields_qp_mem, residual_qp_mem, dtqmaps,
-                   test_vdim, num_dofs, num_qp, num_el](Vector &y) mutable
+      residuals.emplace_back(
+         [&, args, qfarg_to_field, fields_qp_mem, residual_qp_mem, residual_size_on_qp,
+             test_space_field_idx,
+             dtqmaps, integration_weights_mem, num_qp, num_el](Vector &y_e) mutable
       {
-
-         dtqmaps[1].first.Print(std::cout, dtqmaps[1].first.Size()); // ASAN
-
-         std::vector<InterpolationPairTensor> dtqmaps_tensor;
+         std::vector<DofToQuadTensors> dtqmaps_tensor;
          for (const auto &map : dtqmaps)
          {
             dtqmaps_tensor.push_back(
             {
-               Reshape(map.first.Read(), num_dofs, num_qp),
-               Reshape(map.second.Read(), num_dofs, num_qp, dim)
+               Reshape(map.B.Read(), num_qp, map.ndof),
+               Reshape(map.G.Read(), num_qp, dim, map.ndof)
             });
          }
 
          const auto residual_qp =
-            Reshape(residual_qp_mem.ReadWrite(), test_vdim, dim, num_qp, num_el);
+            Reshape(residual_qp_mem.ReadWrite(), residual_size_on_qp, num_qp, num_el);
 
          // Fields interpolated to the quadrature points in the order of quadrature
          // function arguments
@@ -460,34 +533,44 @@ public:
                                       fields_qp_mem[i].ReadWrite(), qf.inputs[i].size_on_qp, num_qp));
          }
 
+         DeviceTensor<1, const double> integration_weights(integration_weights_mem.Read(), num_qp);
+
          std::cout << "begin element loop\n";
          for (int el = 0; el < num_el; el++)
          {
             std::cout << "element " << el << "\n";
 
-            std::cout << Reshape(dtqmaps[qfarg_to_field[0]].first.Read(), num_dofs,
-                                 num_qp)(0, 4) << "\n";
-            exit(0);
-
             // B
-            interpolate(fields_e, qf.inputs, qfarg_to_field, dtqmaps_tensor, el,
-                        fields_qp);
+            // prepare fields on quadrature points
+            map_to_quadrature_data(el, fields_e, qf.inputs, qfarg_to_field, dtqmaps_tensor,
+                                   integration_weights, fields_qp);
 
             for (int qp = 0; qp < num_qp; qp++)
             {
+               auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
+
                auto f_qp = apply_qf(qf.func, args, fields_qp, qp);
+
+               for (int i = 0; i < residual_size_on_qp; i++)
+               {
+                  r_qp(i) = f_qp(i);
+               }
             }
 
             // B^T
-            // integrate(...);
-            std::cout << "\n";
+            if (test_space_field_idx != -1)
+            {
+               // integrate(...);
+               std::cout << "\n";
+            }
+            else
+            {
+               y_e = residual_qp_mem;
+            }
          }
 
          std::cout << "end element loop\n";
-      };
-
-      // replace with emplace_back
-      residuals.push_back(r);
+      });
    }
 
    void Mult(const Vector &x, Vector &y) const
@@ -511,16 +594,24 @@ public:
       }
       // END GPU
 
-      // G^T
-      element_restriction_transpose(residual_e, test_space, y);
-
-      // P^T
-      // prolongation_transpose
+      if (test_space)
+      {
+         // G^T
+         element_restriction_transpose(residual_e, test_space, y);
+         // P^T
+         // prolongation_transpose
+      }
+      else
+      {
+         // No test space means we return quadrature data
+         y = residual_e;
+      }
    }
 
-   int dim;
    std::vector<Field> solutions;
    std::vector<Field> parameters;
+   ParMesh &mesh;
+   int dim;
 
    // solutions and parameters
    std::vector<Field> fields;
@@ -537,7 +628,7 @@ int main()
    Mpi::Init();
 
    int dim = 2;
-   int polynomial_order = 2;
+   int polynomial_order = 1;
    int num_elements = 1;
 
    Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
@@ -552,7 +643,7 @@ int main()
    ParFiniteElementSpace h1fes(&mesh, &h1fec);
 
    const IntegrationRule &ir =
-      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), h1fec.GetOrder() * 2);
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), h1fec.GetOrder() + 1);
 
    ParGridFunction u(&h1fes);
    ParGridFunction rho(&h1fes);
@@ -560,10 +651,10 @@ int main()
    rho = 0.123;
 
    // We really need statically sized objects here
-   // auto foo = [](double u, Vector grad_u, double rho)
-   auto foo = [](Vector x)
+   auto foo = [](Vector x, DenseMatrix J, double w)
    {
-      x.Print(std::cout, x.Size());
+      // spatially varying coefficient
+      x *= std::abs(J.Det()) * w;
       return x;
    };
 
@@ -571,29 +662,24 @@ int main()
    {
       foo,
       // Inputs
-      {
-         {FieldDescriptor::InterpolationType::VALUE, "coordinates"}
-         // {FieldDescriptor::InterpolationType::GRADIENT, "coordinates"}
-         // {FieldDescriptor::InterpolationType::VALUE, "potential"},
-         // {FieldDescriptor::InterpolationType::GRADIENT, "potential"},
-         // {FieldDescriptor::InterpolationType::VALUE, "material1_density"}
+      std::array{
+         FieldDescriptor{FieldDescriptor::Interpolation::VALUE, "coordinates"},
+         FieldDescriptor{FieldDescriptor::Interpolation::GRADIENT, "coordinates"},
+         FieldDescriptor{FieldDescriptor::Interpolation::WEIGHTS, "integration_weights"},
       },
       // Output(s) "integrated against (gradient of) test function"
-      {{FieldDescriptor::InterpolationType::VALUE, "potential"}}};
+      std::array{FieldDescriptor{FieldDescriptor::Interpolation::VALUE, "potential"}}
+      // std::array{FieldDescriptor{FieldDescriptor::Interpolation::NONE, "quadrature_data", 2}}
+   };
 
    DifferentiableForm dop(
       // Solutions
-      // TODO: Describe only with FESpace?
-   {
-      // {u_space, "potential", data = nullptr}
-      {&u, "potential"}
-   },
+   {{&u, "potential"}},
    // Parameters
    {
-      // {rho_space, "material1_density", data = rho}
       {mesh.GetNodes(), "coordinates"},
-      {&rho, "material1_density"}
-   });
+   },
+   mesh);
 
    dop.AddQFunctionIntegrator(qf, ir);
 
