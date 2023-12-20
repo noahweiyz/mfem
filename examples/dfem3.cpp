@@ -880,7 +880,8 @@ public:
                dtqmaps_tensor.push_back(
                {
                   Reshape(map.B.Read(), num_qp, map.ndof),
-                  Reshape(map.G.Read(), num_qp, dim, map.ndof)});
+                  Reshape(map.G.Read(), num_qp, dim, map.ndof)
+               });
             }
 
             const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
@@ -908,6 +909,8 @@ public:
                   integration_weights, qf.inputs,
                   std::make_index_sequence<num_qfinputs> {});
 
+               // TODO: This is currently a hack that fixes the first solution
+               // variable to be the dependent variable in the JvP
                constexpr int primary_variable_idx = 0;
                map_field_to_quadrature_data(directions_qp[primary_variable_idx], el,
                                             dtqmaps_tensor[primary_variable_idx],
