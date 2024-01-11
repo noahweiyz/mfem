@@ -103,17 +103,21 @@ public:
 
    std::string name;
 
-   int size_on_qp;
+   int size_on_qp = -1;
 
-   int dim;
+   int dim = -1;
 
-   int vdim;
+   int vdim = -1;
 };
 
 class None : public FieldDescriptor
 {
 public:
-   None(std::string name) : FieldDescriptor(name) {};
+   None(std::string name, int size_on_qp) :
+      FieldDescriptor(name)
+   {
+      this->size_on_qp = size_on_qp;
+   }
 };
 
 class Weight : public FieldDescriptor
@@ -256,6 +260,19 @@ auto enzyme_fwddiff_apply(qf_type qf, arg_type &&args, arg_type &&shadow_args)
    enzyme_args);
 }
 
+template <typename T>
+struct always_false
+{
+   static constexpr bool value = false;
+};
+
+template <typename T1, typename T2>
+void allocate_qf_arg(const T1&, T2&)
+{
+   static_assert(always_false<T1>::value,
+                 "allocate_qf_arg not implemented for requested type combination");
+}
+
 void allocate_qf_arg(const Weight &input, double &arg)
 {
    // no op
@@ -271,6 +288,11 @@ void allocate_qf_arg(const Value &input, Vector &arg)
    arg.SetSize(input.size_on_qp);
 }
 
+void allocate_qf_arg(const Value &, tensor<double, 2> &)
+{
+   // no op
+}
+
 void allocate_qf_arg(const Gradient &input, Vector &arg)
 {
    arg.SetSize(input.size_on_qp / input.vdim);
@@ -281,12 +303,17 @@ void allocate_qf_arg(const Gradient &input, DenseMatrix &arg)
    arg.SetSize(input.size_on_qp / input.vdim);
 }
 
-void allocate_qf_arg(const Gradient &input, tensor<double, 2> &arg)
+void allocate_qf_arg(const Gradient &, tensor<double, 2> &)
 {
    // no op
 }
 
-void allocate_qf_arg(const Gradient &input, tensor<double, 2, 2> &arg)
+void allocate_qf_arg(const Gradient &, double &)
+{
+   // no op
+}
+
+void allocate_qf_arg(const Gradient &, tensor<double, 2, 2> &)
 {
    // no op
 }
@@ -333,13 +360,14 @@ void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, 2> &arg)
    }
 }
 
-void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, 2, 2> &arg)
+template <int dim, int vdim>
+void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, dim, vdim> &arg)
 {
-   for (int i = 0; i < 2; i++)
+   for (int i = 0; i < vdim; i++)
    {
-      for (int j = 0; j < 2; j++)
+      for (int j = 0; j < dim; j++)
       {
-         arg(i, j) = u[(i * 2) + j];
+         arg(j, i) = u[(i * vdim) + j];
       }
    }
 }
@@ -370,6 +398,13 @@ Vector prepare_qf_result(double x)
 
 Vector prepare_qf_result(Vector x) { return x; }
 
+Vector prepare_qf_result(tensor<double, 1> x)
+{
+   Vector r(1);
+   r(0) = x(0);
+   return r;
+}
+
 Vector prepare_qf_result(tensor<double, 2> x)
 {
    Vector r(2);
@@ -378,6 +413,27 @@ Vector prepare_qf_result(tensor<double, 2> x)
       r(i) = x(i);
    }
    return r;
+}
+
+Vector prepare_qf_result(tensor<double, 2, 2> x)
+{
+   Vector r(4);
+   for (size_t i = 0; i < 2; i++)
+   {
+      for (size_t j = 0; j < 2; j++)
+      {
+         // TODO: Careful with the indices here!
+         r(j + (i * 2)) = x(j, i);
+      }
+   }
+   return r;
+}
+
+template <typename T>
+Vector prepare_qf_result(T)
+{
+   static_assert(always_false<T>::value,
+                 "prepare_qf_result not implemented for result type");
 }
 
 template <typename qf_type, typename qf_args>
@@ -463,6 +519,7 @@ void map_field_to_quadrature_data(
          }
       }
    }
+   // TODO: Create separate function for clarity
    else if constexpr (std::is_same_v<typename std::remove_reference<
                       decltype(input)>::type,
                       Weight>)
@@ -524,8 +581,7 @@ void map_quadrature_data_to_fields(Vector &y_e, int element_idx, int num_el,
       }
    }
    else if constexpr (std::is_same_v<typename std::remove_reference<
-                      decltype(output_fd)>::type,
-                      Gradient>)
+                      decltype(output_fd)>::type, Gradient>)
    {
       const auto G(dtqmaps[test_space_field_idx].G);
       const auto [num_qp, dim, num_dof] = G.GetShape();
@@ -547,6 +603,11 @@ void map_quadrature_data_to_fields(Vector &y_e, int element_idx, int num_el,
             y(dof, vd, element_idx) += acc;
          }
       }
+   }
+   else if constexpr (std::is_same_v<typename std::remove_reference<
+                      decltype(output_fd)>::type, None>)
+   {
+      MFEM_ABORT("yup, this one too");
    }
    else
    {
@@ -674,6 +735,9 @@ public:
       constexpr size_t num_qfinputs = std::tuple_size_v<input_type>;
       // constexpr size_t num_qfoutputs = std::tuple_size_v<output_type>;
 
+      const int num_el = mesh.GetNE();
+      const int num_qp = ir.GetNPoints();
+
       std::cout << "adding quadrature function with quadrature rule "
                 << "\n";
 
@@ -706,15 +770,15 @@ public:
             MFEM_ABORT("need to set size on quadrature point for test space"
                        "that doesn't refer to a field");
          }
-         residual_size_on_qp = output_fd.size_on_qp;
+         else
+         {
+            residual_size_on_qp = output_fd.size_on_qp;
+         }
       }
 
       std::array<int, num_qfinputs> qfarg_to_field;
       map_qfarg_to_field(fields, qfarg_to_field, qf.inputs,
                          std::make_index_sequence<num_qfinputs> {});
-
-      const int num_el = mesh.GetNE();
-      const int num_qp = ir.GetNPoints();
 
       // All solutions T-vector sizes make up the height of the operator, since
       // they are explicitly provided in Mult() for example.
@@ -724,9 +788,16 @@ public:
          this->height += GetFESpace(f).GetTrueVSize();
       }
 
-      // Since we know the test space of the integrator, we know the output size
-      // of the whole operator so it can be set now.
-      this->width = test_space->GetTrueVSize();
+      // Since we know the test space (or the lack of) of the integrator, we
+      // know the output size of the whole operator so it can be set now.
+      if (test_space)
+      {
+         this->width = test_space->GetTrueVSize();
+      }
+      else
+      {
+         this->width = residual_size_on_qp * num_qp * num_el;
+      }
 
       // Creating this here allows to call GradientMult even if there are no
       // dependent ElementOperators.
@@ -810,10 +881,9 @@ public:
 
             for (int qp = 0; qp < num_qp; qp++)
             {
-               auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-
                auto f_qp = apply_qf(qf.func, args, fields_qp, qp);
 
+               auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                for (int i = 0; i < residual_size_on_qp; i++)
                {
                   r_qp(i) = f_qp(i);
@@ -830,7 +900,11 @@ public:
             }
             else
             {
-               MFEM_ABORT("implement this");
+               // identity
+               for (size_t i = 0; i < this->Width(); i++)
+               {
+                  y_e(i) = residual_qp_mem(i);
+               }
             }
          }
       });
@@ -912,19 +986,26 @@ public:
                // TODO: This is currently a hack that fixes the first solution
                // variable to be the dependent variable in the JvP
                constexpr int primary_variable_idx = 0;
-               map_field_to_quadrature_data(directions_qp[primary_variable_idx], el,
+
+               map_field_to_quadrature_data(directions_qp[0], el,
                                             dtqmaps_tensor[primary_variable_idx],
                                             directions_e[primary_variable_idx],
-                                            std::get<primary_variable_idx>(qf.inputs),
+                                            std::get<0>(qf.inputs),
                                             integration_weights);
 
+               // map_field_to_quadrature_data(directions_qp[1], el,
+               //                              dtqmaps_tensor[primary_variable_idx],
+               //                              directions_e[primary_variable_idx],
+               //                              std::get<1>(qf.inputs),
+               //                              integration_weights);
+
+               // D -> D
                for (int qp = 0; qp < num_qp; qp++)
                {
-                  auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-
                   auto f_qp = apply_qf_fwddiff(qf.func, args, fields_qp, shadow_args,
                                                directions_qp, qp);
 
+                  auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                   for (int i = 0; i < residual_size_on_qp; i++)
                   {
                      r_qp(i) = f_qp(i);
@@ -1049,135 +1130,792 @@ public:
    Array<int> ess_tdof_list;
 };
 
-int main()
+int test_interpolate_linear_scalar()
 {
-   Mpi::Init();
-
-   int dim = 2;
-   int polynomial_order = 2;
-   int num_elements = 4;
-
+   constexpr int num_elements = 1;
    Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
-                                            Element::Type::QUADRILATERAL);
-   // Mesh mesh_serial("../data/star.mesh");
+                                            Element::QUADRILATERAL);
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
    mesh.SetCurvature(1);
+   const int dim = mesh.Dimension();
+   mesh_serial.Clear();
 
+   int polynomial_order = 1;
+   H1_FECollection h1fec(polynomial_order, dim);
+   ParFiniteElementSpace h1fes(&mesh, &h1fec);
+
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
+
+   ParGridFunction f1_g(&h1fes);
+
+   auto mass_qf = [](double u, tensor<double, 2, 2> J, double w)
+   {
+      out << u << " ";
+      return u;
+   };
+
+   ElementOperator mass
+   {
+      mass_qf,
+      // inputs
+      std::tuple{
+         Value{"primary_variable"},
+         Gradient{"coordinates"},
+         Weight{"integration_weight"}},
+      // outputs
+      std::tuple{Value{"primary_variable"}}};
+
+   DifferentiableForm dop(
+   {{&f1_g, "primary_variable"}},
+   {{mesh.GetNodes(), "coordinates"}},
+   mesh);
+
+   dop.AddElementOperator(mass, ir);
+
+   auto f1 = [](const Vector &coords)
+   {
+      const double x = coords(0);
+      const double y = coords(1);
+      return 2.345 + x + y;
+   };
+
+   FunctionCoefficient f1_c(f1);
+   f1_g.ProjectCoefficient(f1_c);
+
+   Vector x(f1_g), y(f1_g.Size());
+   dop.Mult(x, y);
+
+   out << "\n";
+   for (int e = 0; e < num_elements; e++)
+   {
+      ElementTransformation *T = mesh.GetElementTransformation(e);
+      for (int qp = 0; qp < ir.GetNPoints(); qp++)
+      {
+         const IntegrationPoint &ip = ir.IntPoint(qp);
+         T->SetIntPoint(&ip);
+
+         double f = f1_c.Eval(*T, ip);
+         out << f << " ";
+      }
+   }
+
+   return 0;
+}
+
+void print_matrix(DenseMatrix m)
+{
+   out << "{";
+   for (int i = 0; i < m.NumRows(); i++)
+   {
+      out << "{";
+      for (int j = 0; j < m.NumCols(); j++)
+      {
+         out << m(i, j);
+         if (j < m.NumCols() - 1)
+         {
+            out << ", ";
+         }
+      }
+      if (i < m.NumRows() - 1)
+      {
+         out << "}, ";
+      }
+      else
+      {
+         out << "}";
+      }
+   }
+   out << "} ";
+}
+
+void print_vector(Vector v)
+{
+   out << "{";
+   for (int i = 0; i < v.Size(); i++)
+   {
+      out << v(i);
+      if (i < v.Size() - 1)
+      {
+         out << ", ";
+      }
+   }
+   out << "}";
+}
+
+int test_interpolate_gradient_scalar(const int polynomial_order)
+{
+   constexpr int num_elements = 1;
+   // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
+   //                                          Element::QUADRILATERAL);
+   Mesh mesh_serial = Mesh("../data/skewed-square.mesh");
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+   mesh.SetCurvature(1);
+   const int dim = mesh.Dimension();
    mesh_serial.Clear();
 
    H1_FECollection h1fec(polynomial_order, dim);
    ParFiniteElementSpace h1fes(&mesh, &h1fec);
 
-   Array<int> ess_tdof_list;
-   if (mesh.bdr_attributes.Size())
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
+
+   ParGridFunction f1_g(&h1fes);
+
+   auto mass_qf = [](double u, tensor<double, 2> grad_u, tensor<double, 2, 2> J,
+                     double w)
    {
-      Array<int> ess_bdr(mesh.bdr_attributes.Max());
-      ess_bdr = 1;
-      h1fes.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+      out << grad_u * transpose(inv(J)) << " ";
+      return 0.0;
+   };
+
+   ElementOperator mass
+   {
+      mass_qf,
+      // inputs
+      std::tuple{
+         Value{"primary_variable"},
+         Gradient{"primary_variable"},
+         Gradient{"coordinates"},
+         Weight{"integration_weight"}},
+      // outputs
+      std::tuple{Value{"primary_variable"}}};
+
+   DifferentiableForm dop(
+   {{&f1_g, "primary_variable"}},
+   {{mesh.GetNodes(), "coordinates"}},
+   mesh);
+
+   dop.AddElementOperator(mass, ir);
+
+   auto f1 = [](const Vector &coords)
+   {
+      const double x = coords(0);
+      const double y = coords(1);
+      return 2.345 + x*y + y;
+   };
+
+   FunctionCoefficient f1_c(f1);
+   f1_g.ProjectCoefficient(f1_c);
+
+   Vector x(f1_g), y(f1_g.Size());
+   dop.Mult(x, y);
+
+   out << "\n";
+   for (int e = 0; e < num_elements; e++)
+   {
+      ElementTransformation *T = mesh.GetElementTransformation(e);
+      for (int qp = 0; qp < ir.GetNPoints(); qp++)
+      {
+         const IntegrationPoint &ip = ir.IntPoint(qp);
+         T->SetIntPoint(&ip);
+
+         Vector g(dim);
+         f1_g.GetGradient(*T, g);
+         out << "{";
+         for (int i = 0; i < dim; i++)
+         {
+            out << g(i);
+            if (i < dim - 1)
+            {
+               out << ", ";
+            }
+            else
+            {
+               out << "} ";
+            }
+         }
+
+         // out << f1_g.GetValue(*T) << " ";
+      }
    }
+
+   out << "\n";
+
+   return 0;
+}
+
+int test_interpolate_linear_vector(const int refinements, int polynomial_order)
+{
+   constexpr int vdim = 2;
+   Mesh mesh_serial = Mesh::MakeCartesian2D(1, 1,
+                                            Element::QUADRILATERAL);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh_serial.UniformRefinement();
+   }
+
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+   mesh.SetCurvature(1);
+   const int dim = mesh.Dimension();
+   mesh_serial.Clear();
+
+   H1_FECollection h1fec(polynomial_order, dim);
+   ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
+
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
+
+   ParGridFunction f1_g(&h1fes);
+
+   auto mass_qf = [](tensor<double, vdim> u, tensor<double, 2, 2> J, double w)
+   {
+      out << u << " ";
+      return u;
+   };
+
+   ElementOperator mass
+   {
+      mass_qf,
+      // inputs
+      std::tuple{
+         Value{"primary_variable"},
+         Gradient{"coordinates"},
+         Weight{"integration_weight"}},
+      // outputs
+      std::tuple{Value{"primary_variable"}}};
+
+   DifferentiableForm dop(
+   {{&f1_g, "primary_variable"}},
+   {{mesh.GetNodes(), "coordinates"}},
+   mesh);
+
+   dop.AddElementOperator(mass, ir);
+
+   auto f1 = [](const Vector &coords, Vector &u)
+   {
+      const double x = coords(0);
+      const double y = coords(1);
+      u(0) = 2.345 + x + y;
+      u(1) = 12.345 + x + y;
+   };
+
+   VectorFunctionCoefficient f1_c(vdim, f1);
+   f1_g.ProjectCoefficient(f1_c);
+
+   Vector x(f1_g), y(f1_g.Size());
+   dop.Mult(x, y);
+
+   out << "\n";
+   for (int e = 0; e < mesh.GetNE(); e++)
+   {
+      ElementTransformation *T = mesh.GetElementTransformation(e);
+      for (int qp = 0; qp < ir.GetNPoints(); qp++)
+      {
+         const IntegrationPoint &ip = ir.IntPoint(qp);
+         T->SetIntPoint(&ip);
+
+         Vector f(vdim);
+         f1_c.Eval(f, *T, ip);
+         out << "{";
+         for (int i = 0; i < vdim; i++)
+         {
+            out << f(i);
+            if (i < vdim - 1)
+            {
+               out << ", ";
+            }
+            else
+            {
+               out << "} ";
+            }
+         }
+
+      }
+      out << "\n";
+   }
+
+   return 0;
+}
+
+int test_interpolate_gradient_vector(const std::string mesh_file,
+                                     const int refinements,
+                                     int polynomial_order)
+{
+   constexpr int vdim = 2;
+   Mesh mesh_serial = Mesh(mesh_file, 1, 1);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh_serial.UniformRefinement();
+   }
+
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+   mesh.SetCurvature(1);
+   const int dim = mesh.Dimension();
+   mesh_serial.Clear();
+
+   H1_FECollection h1fec(polynomial_order, dim);
+   ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
+
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
+
+   ParGridFunction f1_g(&h1fes);
+
+   auto mass_qf = [](tensor<double, vdim, 2> grad_u, tensor<double, 2, 2> J,
+                     double w)
+   {
+      // out << grad_u * transpose(inv(J)) << " ";
+      return grad_u;
+   };
+
+   ElementOperator mass
+   {
+      mass_qf,
+      // inputs
+      std::tuple{
+         Gradient{"primary_variable"},
+         Gradient{"coordinates"},
+         Weight{"integration_weight"}},
+      // outputs
+      std::tuple{Value{"primary_variable"}}};
+
+   DifferentiableForm dop(
+   {{&f1_g, "primary_variable"}},
+   {{mesh.GetNodes(), "coordinates"}},
+   mesh);
+
+   dop.AddElementOperator(mass, ir);
+
+   auto f1 = [](const Vector &coords, Vector &u)
+   {
+      const double x = coords(0);
+      const double y = coords(1);
+      u(0) = x + y;
+      u(1) = x + 0.5*y;
+   };
+
+   VectorFunctionCoefficient f1_c(vdim, f1);
+   f1_g.ProjectCoefficient(f1_c);
+
+   Vector x(f1_g), y(f1_g.Size());
+   dop.Mult(x, y);
+
+   out << "\n";
+   for (int e = 0; e < mesh.GetNE(); e++)
+   {
+      ElementTransformation *T = mesh.GetElementTransformation(e);
+      for (int qp = 0; qp < ir.GetNPoints(); qp++)
+      {
+         const IntegrationPoint &ip = ir.IntPoint(qp);
+         T->SetIntPoint(&ip);
+
+         DenseMatrix g(vdim, dim);
+         f1_g.GetVectorGradient(*T, g);
+         g.Symmetrize();
+         DenseMatrix J(dim, dim);
+         print_matrix(T->Jacobian());
+      }
+      out << "\n";
+   }
+
+   return 0;
+}
+
+int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
+                                   const int polynomial_order)
+{
+   const int dim = mesh.Dimension();
+   H1_FECollection h1fec(polynomial_order, dim);
+   ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
+
+   Array<int> ess_tdof_list;
+   Array<int> ess_bdr(mesh.bdr_attributes.Max());
+   ess_bdr = 1;
+   h1fes.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
 
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
    std::cout << "nqpts = " << ir.GetNPoints() << std::endl;
+   std::cout << "ndofs = " << h1fes.GlobalTrueVSize() << std::endl;
 
    ParGridFunction u(&h1fes);
-   ParGridFunction rho(&h1fes);
 
-   rho = 0.123;
-
-   auto foo = [](tensor<double, 2> grad_u, tensor<double, 2, 2> J, double w)
+   auto pa_setup = [](tensor<double, 2, 2> J, double w)
    {
-      return grad_u * inv(J) * transpose(inv(J)) * det(J) * w;
+      // out << transpose(inv(J)) * det(J) * w << "\n";
+      // return transpose(inv(J)) * det(J) * w;
+      return det(J) * w;
    };
 
    ElementOperator qf
    {
-      foo,
+      // quadrature function lambda
+      pa_setup,
       // inputs
       std::tuple{
-         Gradient{"potential"},
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
-      // outputs
-      std::tuple{Gradient{"potential"}}};
+      // outputs (return values)
+      std::tuple{
+         None{"quadrature_data", 1}
+      }
+   };
+
+   DifferentiableForm dop_pasetup(
+      // Solutions
+      {},
+      // Parameters
+   {
+      {mesh.GetNodes(), "coordinates"},
+   },
+   mesh);
+
+   dop_pasetup.AddElementOperator(qf, ir, Independent{});
+
+   Vector x, y(mesh.GetNE() * ir.GetNPoints() * dim * vdim);
+   dop_pasetup.Mult(x, y);
+
+   print_vector(y);
+   out << "\n";
+
+   out << "sum: " << y.Sum() << "\n";
+
+   auto pa_apply = [](double qdata)
+   {
+      return 1.0 * qdata;
+   };
+
+   ElementOperator qf_apply
+   {
+      // quadrature function lambda
+      pa_apply,
+      // inputs
+      std::tuple{
+         None{"quadrature_data", 1}
+      },
+      // outputs (return values)
+      std::tuple{
+         Value{"potential"}
+      }
+   };
+
+   // DifferentiableForm dop_apply(
+   //    // Solutions
+   //    {},
+   //    // Parameters
+   // {
+   //    {&y, "quadrature_data"},
+   // },
+   // mesh);
+
+   return 0;
+}
+
+int main(int argc, char *argv[])
+{
+   Mpi::Init();
+
+   std::cout << std::setprecision(9);
+
+   const char *mesh_file = "../data/star.mesh";
+   int polynomial_order = 1;
+   int refinements = 0;
+
+   OptionsParser args(argc, argv);
+   args.AddOption(&mesh_file, "-m", "--mesh", "Mesh file to use.");
+   args.AddOption(&polynomial_order, "-o", "--order", "");
+   args.AddOption(&refinements, "-r", "--r", "");
+   args.ParseCheck();
+
+   int ret;
+   // ret = test_interpolate_linear_scalar(polynomial_order);
+   // ret = test_interpolate_gradient_scalar(polynomial_order);
+   // ret = test_interpolate_linear_vector(refinements, polynomial_order);
+   // ret = test_interpolate_gradient_vector(mesh_file, refinements,
+   //                                        polynomial_order);
+
+   // exit(0);
+
+   // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
+   //                                          Element::Type::QUADRILATERAL);
+   Mesh mesh_serial(mesh_file, 1, 1);
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+   mesh.SetCurvature(1);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh.UniformRefinement();
+   }
+   const int dim = mesh.Dimension();
+   mesh_serial.Clear();
+
+   constexpr int vdim = 2;
+
+   test_partial_assembly_setup_qf(mesh, vdim, polynomial_order);
+
+   // exit(0);
+
+   H1_FECollection h1fec(polynomial_order, dim);
+   ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
+
+   Array<int> ess_tdof_list;
+   Array<int> ess_bdr(mesh.bdr_attributes.Max());
+   ess_bdr = 1;
+   h1fes.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
+
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
+
+   std::cout << "nqpts = " << ir.GetNPoints() << std::endl;
+   std::cout << "ndofs = " << h1fes.GlobalTrueVSize() << std::endl;
+
+   ParGridFunction u(&h1fes);
+   ParGridFunction g(&h1fes);
+   ParGridFunction rho(&h1fes);
+
+   auto exact_solution = [](const Vector &coords, Vector &u)
+   {
+      const double x = coords(0);
+      const double y = coords(1);
+      u(0) = x*x + y;
+      u(1) = x + 0.5*y*y;
+   };
+
+   VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
+
+   auto linear_elastic = [](tensor<double, 2, 2> dudxi, tensor<double, 2, 2> J,
+                            double w)
+   {
+      using mfem::internal::tensor;
+      using mfem::internal::IsotropicIdentity;
+
+      double lambda, mu;
+      {
+         lambda = 1.0;
+         mu = 1.0;
+      }
+      static constexpr auto I = IsotropicIdentity<2>();
+      auto eps = sym(dudxi * inv(J));
+      auto JxW = transpose(inv(J)) * det(J) * w;
+      return (lambda * tr(eps) * I + 2.0 * mu * eps) * JxW;
+   };
+
+   ElementOperator qf
+   {
+      // quadrature function lambda
+      linear_elastic,
+      // inputs
+      std::tuple{
+         Gradient{"displacement"},
+         Gradient{"coordinates"},
+         Weight{"integration_weight"}},
+      // outputs (return values)
+      std::tuple{
+         Gradient{"displacement"}
+      }
+   };
 
    ElementOperator forcing_qf
    {
-      [](tensor<double, 2, 2> J, double w) { return -det(J) * w; },
+      [](tensor<double, 2> x, tensor<double, 2, 2> J, double w)
+      {
+         double lambda, mu;
+         {
+            lambda = 1.0;
+            mu = 1.0;
+         }
+         auto f = x;
+         f(0) = 4.0*mu + 2.0*lambda;
+         f(1) = 2.0*mu + lambda;
+         return f * det(J) * w;
+      },
       // inputs
       std::tuple{
+         Value{"coordinates"},
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
       // outputs
       std::tuple{
-         Value{"potential"}}
+         Value{"displacement"}}
    };
 
    DifferentiableForm dop(
       // Solutions
-   {{&u, "potential"}},
+   {{&u, "displacement"}},
    // Parameters
    {
       {mesh.GetNodes(), "coordinates"},
    },
    mesh);
 
+   // auto exact_solution = [](const Vector &coords, Vector &u)
+   // {
+   //    const double x = coords(0);
+   //    const double y = coords(1);
+   //    u(0) = cos(y)+sin(x);
+   //    u(1) = sin(x)-cos(y);
+   // };
+
+   // VectorFunctionCoefficient exact_solution_coeff(vdim, exact_solution);
+
+   // auto scalar_diffusion = [](tensor<double, 2, 2> grad_u,
+   //                            tensor<double, 2, 2> J, double w)
+   // {
+   //    auto r = grad_u * inv(J) * transpose(inv(J)) * det(J) * w;
+   //    return r;
+   // };
+
+   // ElementOperator qf
+   // {
+   //    scalar_diffusion,
+   //    // inputs
+   //    std::tuple{
+   //       Gradient{"potential"},
+   //       Gradient{"coordinates"},
+   //       Weight{"integration_weight"}},
+   //    // outputs
+   //    std::tuple{
+   //       Gradient{"potential"}
+   //    }
+   // };
+
+   // ElementOperator forcing_qf
+   // {
+   //    [](tensor<double, 2> coords, tensor<double, 2, 2> J, double w)
+   //    {
+   //       const double x = coords(0);
+   //       const double y = coords(1);
+   //       const double f0 = cos(y)+sin(x);
+   //       const double f1 = sin(x)-cos(y);
+   //       return tensor<double, 2> {-f0, -f1} * det(J) * w;
+   //    },
+   //    // inputs
+   //    std::tuple{
+   //       Value{"coordinates"},
+   //       Gradient{"coordinates"},
+   //       Weight{"integration_weight"}},
+   //    // outputs
+   //    std::tuple{
+   //       Value{"potential"}}
+   // };
+
+   // // auto mass_qf = [](tensor<double, 2> u, tensor<double, 2, 2> grad_u,
+   // //                   tensor<double, 2, 2> J, double w)
+   // // {
+   // //    return u * det(J) * w;
+   // // };
+
+   // // ElementOperator mass
+   // // {
+   // //    mass_qf,
+   // //    // inputs
+   // //    std::tuple{
+   // //       Value{"potential"},
+   // //       Gradient{"potential"},
+   // //       Gradient{"coordinates"},
+   // //       Weight{"integration_weight"}},
+   // //    // outputs
+   // //    std::tuple{Value{"potential"}}};
+
+   // DifferentiableForm dop(
+   //    // Solutions
+   // {
+   //    {&u, "potential"},
+   // },
+   // // Parameters
+   // {
+   //    {mesh.GetNodes(), "coordinates"},
+   // },
+   // mesh);
+
+   // // auto J = Reshape(mesh.GetGeometricFactors(ir,
+   // //                                           GeometricFactors::JACOBIANS)->J.Read(), ir.GetNPoints(), dim, dim, 1);
+
+   // // for (int i = 0; i < ir.GetNPoints(); i++)
+   // // {
+   // //    for (int c = 0; c < dim; c++)
+   // //    {
+   // //       for (int r = 0; r < dim; r++)
+   // //       {
+   // //          printf("%+.2f ", J(i, r, c, 0));
+   // //       }
+   // //       printf("\n");
+   // //    }
+   // //    printf("\n");
+   // // }
+
    dop.AddElementOperator(qf, ir);
    dop.AddElementOperator(forcing_qf, ir, Independent{});
    dop.SetEssentialTrueDofs(ess_tdof_list);
 
+   // {
+   //    DenseMatrix J(u.Size());
+   //    u.ProjectCoefficient(exact_solution_coeff);
+   //    auto &dop_grad = dop.GetGradient(u);
+
+   //    Vector y(u.Size());
+   //    u = 0.0;
+   //    std::ofstream ostrm("amat_dfem.dat");
+   //    for (size_t i = 0; i < u.Size(); i++)
+   //    {
+   //       u(i) = 1.0;
+   //       dop_grad.Mult(u, y);
+   //       J.SetRow(i, y);
+   //       u(i) = 0.0;
+   //    }
+   //    for (size_t i = 0; i < u.Size(); i++)
+   //    {
+   //       for (size_t j = 0; j < u.Size(); j++)
+   //       {
+   //          ostrm << J(i,j) << " ";
+   //       }
+   //       ostrm << "\n";
+   //    }
+   //    ostrm.close();
+   //    exit(0);
+   // }
+
    GMRESSolver gmres(MPI_COMM_WORLD);
-   gmres.SetAbsTol(1e-12);
    gmres.SetRelTol(1e-12);
    gmres.SetMaxIter(500);
-   // gmres.SetPrintLevel(IterativeSolver::PrintLevel().All());
+   gmres.SetPrintLevel(IterativeSolver::PrintLevel().Summary());
 
    NewtonSolver newton(MPI_COMM_WORLD);
    newton.SetSolver(gmres);
    newton.SetOperator(dop);
-   newton.SetRelTol(1e-8);
-   newton.SetMaxIter(10);
+   newton.SetRelTol(1e-12);
+   newton.SetMaxIter(100);
+   // newton.SetAdaptiveLinRtol();
    newton.SetPrintLevel(1);
 
-   std::cout << std::setprecision(9);
-
-   Vector &x = u.GetTrueVector();
+   u.Randomize(123);
+   u.ProjectBdrCoefficient(exact_solution_coeff, ess_bdr);
+   Vector x;
+   u.GetTrueDofs(x);
    Vector y(x.Size());
-   x = 1.0;
-   x.SetSubVector(ess_tdof_list, 0.0);
 
-   // x = 1.0;
-   // x.SetSubVector(ess_tdof_list, 0.0);
    // dop.Mult(x, y);
-   // y.Print(std::cout, y.Size());
-   // x = 0.85;
-   // x.SetSubVector(ess_tdof_list, 0.0);
-   // dop.Mult(x, y);
-   // y.Print(std::cout, y.Size());
-
-   // Vector dx(x.Size());
-   // dx = 1.0;
-   // dx.SetSubVector(ess_tdof_list, 0.0);
-   // auto &dop_jvp = dop.GetGradient(x);
-   // dop_jvp.Mult(dx, y);
-   // y.Print(std::cout, y.Size());
+   // exit(0);
 
    Vector zero;
    newton.Mult(zero, x);
 
-   x.Print(std::cout, x.Size());
-
    u.Distribute(x);
 
-   if (true)
-   {
-      char vishost[] = "localhost";
-      int  visport   = 19916;
-      socketstream sol_sock(vishost, visport);
-      sol_sock.precision(8);
-      sol_sock << "solution\n" << mesh << u << std::flush;
-   }
+   std::cout << "|u-u_ex|_L2 = " << u.ComputeL2Error(exact_solution_coeff) << "\n";
+
+   // if (true)
+   // {
+   //    char vishost[] = "localhost";
+   //    int  visport   = 19916;
+   //    {
+   //       socketstream sol_sock(vishost, visport);
+   //       sol_sock.precision(8);
+   //       sol_sock << "solution\n" << mesh << u << std::flush;
+   //    }
+   //    {
+   //       g.ProjectCoefficient(exact_solution_coeff);
+   //       for (int i = 0; i < g.Size(); i++)
+   //       {
+   //          g(i) = abs(g(i) - u(i));
+   //       }
+
+   //       socketstream sol_sock(vishost, visport);
+   //       sol_sock.precision(8);
+   //       sol_sock << "solution\n" << mesh << g << std::flush;
+   //    }
+   // }
 
    return 0;
 }
