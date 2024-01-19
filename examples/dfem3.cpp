@@ -915,6 +915,11 @@ public:
       : solutions(solutions), parameters(parameters), mesh(mesh)
    {
       dim = mesh.Dimension();
+      if (solutions.size() > 1)
+      {
+         MFEM_ABORT("only one trial space allowed at the moment, tried with " <<
+                    solutions.size());
+      }
       fields.insert(fields.end(), solutions.begin(), solutions.end());
       fields.insert(fields.end(), parameters.begin(), parameters.end());
 
@@ -942,13 +947,18 @@ public:
    {
       constexpr ElementDofOrdering element_dof_ordering = ElementDofOrdering::NATIVE;
       constexpr size_t num_qfinputs = std::tuple_size_v<input_type>;
-      // constexpr size_t num_qfoutputs = std::tuple_size_v<output_type>;
+      constexpr size_t num_qfoutputs = std::tuple_size_v<output_type>;
+
+      if (num_qfoutputs != 1)
+      {
+         MFEM_ABORT("only one test space allowed at the moment");
+      }
 
       const int num_el = mesh.GetNE();
       const int num_qp = ir.GetNPoints();
 
-      std::cout << "adding quadrature function with quadrature rule "
-                << "\n";
+      std::cout << "adding element operator with " << num_qfinputs << " inputs and "
+                << num_qfoutputs << " outputs" << "\n";
 
       int test_space_field_idx;
       int residual_size_on_qp;
@@ -978,7 +988,17 @@ public:
       {
          this->height += GetTrueVSize(f);
       }
-      this->width = residual_size_on_qp * num_qp * num_el;
+
+      // TODO: Only works for one test space
+      if constexpr (std::is_same_v<typename
+                    std::remove_reference<decltype(output_fd)>, None>)
+      {
+         this->width = residual_size_on_qp * num_qp * num_el;
+      }
+      else
+      {
+         this->width = this->height;
+      }
 
       // Creating this here allows to call GradientMult even if there are no
       // dependent ElementOperators.
@@ -996,11 +1016,7 @@ public:
       qf.inputs);
 
       Vector residual_qp_mem(residual_size_on_qp * num_qp * num_el);
-      {
-         auto R = GetElementRestriction(fields[test_space_field_idx],
-                                        element_dof_ordering);
-         residual_e.SetSize(residual_qp_mem.Size());
-      }
+      residual_e.SetSize(residual_qp_mem.Size());
 
       using qf_args = typename create_function_signature<
                       decltype(&qf_type::operator())>::type::parameter_types;
@@ -1710,18 +1726,19 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    DifferentiableForm dop_pasetup(
       // Solutions
    {
-      {&qf, "quadrature_data"}
    },
    // Parameters
    {
       {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"}
    },
    mesh);
 
    dop_pasetup.AddElementOperator(eop, ir, Independent{});
 
    out << "setup" << "\n";
-   dop_pasetup.Mult(qf, qf);
+   Vector zero;
+   dop_pasetup.Mult(zero, qf);
 
    auto pa_apply = [](tensor<double, 2> dudxi, tensor<double, 2, 2> qdata)
    {
@@ -1756,33 +1773,33 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    out << "apply" << "\n";
    dop_paapply.Mult(u, y);
 
-   out << "gradient" << "\n";
-   {
-      u = 1.0;
-      DenseMatrix J(u.Size());
-      auto &dop_grad = dop_paapply.GetGradient(u);
+   // out << "gradient" << "\n";
+   // {
+   //    u = 1.0;
+   //    DenseMatrix J(u.Size());
+   //    auto &dop_grad = dop_paapply.GetGradient(u);
 
-      Vector y(u.Size());
-      u = 0.0;
-      std::ofstream ostrm("amat_dfem.dat");
-      for (size_t i = 0; i < u.Size(); i++)
-      {
-         u(i) = 1.0;
-         dop_grad.Mult(u, y);
-         J.SetRow(i, y);
-         u(i) = 0.0;
-      }
-      for (size_t i = 0; i < u.Size(); i++)
-      {
-         for (size_t j = 0; j < u.Size(); j++)
-         {
-            ostrm << J(i,j) << " ";
-         }
-         ostrm << "\n";
-      }
-      ostrm.close();
-      // exit(0);
-   }
+   //    Vector y(u.Size());
+   //    u = 0.0;
+   //    std::ofstream ostrm("amat_dfem.dat");
+   //    for (size_t i = 0; i < u.Size(); i++)
+   //    {
+   //       u(i) = 1.0;
+   //       dop_grad.Mult(u, y);
+   //       J.SetRow(i, y);
+   //       u(i) = 0.0;
+   //    }
+   //    for (size_t i = 0; i < u.Size(); i++)
+   //    {
+   //       for (size_t j = 0; j < u.Size(); j++)
+   //       {
+   //          ostrm << J(i,j) << " ";
+   //       }
+   //       ostrm << "\n";
+   //    }
+   //    ostrm.close();
+   //    // exit(0);
+   // }
 
    return 0;
 }
@@ -2046,12 +2063,12 @@ int main(int argc, char *argv[])
    //       ostrm << "\n";
    //    }
    //    ostrm.close();
-   //    exit(0);
+   //    // exit(0);
    // }
 
    GMRESSolver gmres(MPI_COMM_WORLD);
    gmres.SetRelTol(1e-12);
-   gmres.SetMaxIter(500);
+   gmres.SetMaxIter(5000);
    gmres.SetPrintLevel(IterativeSolver::PrintLevel().Summary());
 
    NewtonSolver newton(MPI_COMM_WORLD);
@@ -2062,7 +2079,7 @@ int main(int argc, char *argv[])
    // newton.SetAdaptiveLinRtol();
    newton.SetPrintLevel(1);
 
-   u.Randomize(123);
+   u = 1e-6;
    u.ProjectBdrCoefficient(exact_solution_coeff, ess_bdr);
    Vector x;
    u.GetTrueDofs(x);
