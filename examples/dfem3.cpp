@@ -40,6 +40,46 @@ constexpr auto get_type_name() -> std::string_view
 
 using namespace mfem;
 
+void print_matrix(DenseMatrix m)
+{
+   out << "{";
+   for (int i = 0; i < m.NumRows(); i++)
+   {
+      out << "{";
+      for (int j = 0; j < m.NumCols(); j++)
+      {
+         out << m(i, j);
+         if (j < m.NumCols() - 1)
+         {
+            out << ", ";
+         }
+      }
+      if (i < m.NumRows() - 1)
+      {
+         out << "}, ";
+      }
+      else
+      {
+         out << "}";
+      }
+   }
+   out << "} ";
+}
+
+void print_vector(Vector v)
+{
+   out << "{";
+   for (int i = 0; i < v.Size(); i++)
+   {
+      out << v(i);
+      if (i < v.Size() - 1)
+      {
+         out << ", ";
+      }
+   }
+   out << "}";
+}
+
 using mfem::internal::tensor;
 
 int enzyme_dup;
@@ -53,6 +93,15 @@ return_type __enzyme_fwddiff(void *, T...);
 template <typename return_type, typename... T>
 return_type __enzyme_autodiff(void *, T...);
 
+template <typename T>
+struct always_false
+{
+   static constexpr bool value = false;
+};
+
+template<class>
+inline constexpr bool always_false_v = false;
+
 struct Independent {};
 struct Dependent {};
 
@@ -63,37 +112,140 @@ struct DofToQuadTensors
 };
 
 using Field =
-   std::pair<std::variant<const GridFunction *, const ParGridFunction *>,
+   std::pair<
+   std::variant<
+   const QuadratureFunction *,
+   const GridFunction *,
+   const ParGridFunction *>,
    std::string>;
 
-const GridFunction &GetGridFunction(const Field &f)
+const Vector &GetFieldData(Field &f)
 {
-   if (std::holds_alternative<const ParGridFunction *>(f.first))
+   return *std::visit([](auto&& f) -> const Vector*
    {
-      return *std::get<const ParGridFunction *>(f.first);
-   }
-   else if (std::holds_alternative<const GridFunction *>(f.first))
-   {
-      return *std::get<const GridFunction *>(f.first);
-   }
-   else
-   {
-      MFEM_ABORT("variant not supported");
-   }
+      return static_cast<const Vector *>(f);
+   }, f.first);
 }
 
-// This probably won't work in parallel. Need to find a way to make a
-// distinction between Par/Non-ParFESpace here.
-const FiniteElementSpace &GetFESpace(const Field &f)
+const Operator *GetElementRestriction(const Field &f, ElementDofOrdering o)
 {
-   return *GetGridFunction(f).FESpace();
+   return std::visit([&o](auto&& arg) -> const Operator*
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetElementRestriction(o);
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetElementRestriction(o);
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return nullptr;
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetElementRestriction on type");
+      }
+   }, f.first);
 }
 
-int GetVDim(const Field &f) { return GetFESpace(f).GetVDim(); }
+const DofToQuad *GetDofToQuad(const Field &f, const IntegrationRule &ir,
+                              DofToQuad::Mode mode)
+{
+   return std::visit([&ir, &mode](auto&& arg) -> const DofToQuad*
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return &arg->FESpace()->GetFE(0)->GetDofToQuad(ir, mode);
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return &arg->FESpace()->GetFE(0)->GetDofToQuad(ir, mode);
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return nullptr;
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetDofToQuad on type");
+      }
+   }, f.first);
+}
+
+int GetTrueVSize(const Field &f)
+{
+   return std::visit([](auto && arg)
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetTrueVSize();
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetTrueVSize();
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return arg->Size();
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetTrueVSize on type");
+      }
+   }, f.first);
+}
+
+int GetVDim(const Field &f)
+{
+   return std::visit([](auto && arg)
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetVDim();
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetVDim();
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return arg->GetVDim();
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetVDim on type");
+      }
+   }, f.first);
+}
 
 int GetDimension(const Field &f)
 {
-   return GetFESpace(f).GetMesh()->Dimension();
+   return std::visit([](auto && arg)
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetMesh()->Dimension();
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetMesh()->Dimension();
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return 1;
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetDimension on type");
+      }
+   }, f.first);
 }
 
 class FieldDescriptor
@@ -113,11 +265,7 @@ public:
 class None : public FieldDescriptor
 {
 public:
-   None(std::string name, int size_on_qp) :
-      FieldDescriptor(name)
-   {
-      this->size_on_qp = size_on_qp;
-   }
+   None(std::string name) : FieldDescriptor(name) {}
 };
 
 class Weight : public FieldDescriptor
@@ -148,6 +296,10 @@ int GetSizeOnQP(const field_descriptor_type &fd, const Field &f)
    else if constexpr (std::is_same_v<field_descriptor_type, Gradient>)
    {
       return GetVDim(f) * GetDimension(f);
+   }
+   else if constexpr (std::is_same_v<field_descriptor_type, None>)
+   {
+      return GetVDim(f);
    }
    else
    {
@@ -186,29 +338,48 @@ void element_restriction(std::vector<Field> fields, const Vector &x,
    int offset = 0;
    for (int i = 0; i < fields.size(); i++)
    {
-      auto fes = GetFESpace(fields[i]);
-      const auto R = fes.GetElementRestriction(ElementDofOrdering::NATIVE);
-      const int height = R->Height();
-      const Vector x_i(x.GetData() + offset, height);
-      fields_e[i].SetSize(height);
+      const auto R = GetElementRestriction(fields[i], ElementDofOrdering::NATIVE);
+      if (R != nullptr)
+      {
+         const int height = R->Height();
+         const Vector x_i(x.GetData() + offset, height);
+         fields_e[i].SetSize(height);
 
-      R->Mult(x_i, fields_e[i]);
-
-      offset += height;
+         MFEM_ASSERT(x_i.Size() == R->Height(),
+                     "trying to restrict field to elements but input vector "
+                     "given to ::Mult is not the correct size");
+         R->Mult(x_i, fields_e[i]);
+         offset += height;
+      }
+      else
+      {
+         const int height = GetTrueVSize(fields[i]);
+         fields_e[i].SetSize(height);
+         const Vector x_i(x.GetData() + offset, height);
+         fields_e[i] = x_i;
+         offset += height;
+      }
    }
 }
 
-void element_restriction(std::vector<Field> fields, int offset,
+void element_restriction(std::vector<Field> fields, int field_offset,
                          std::vector<Vector> &fields_e)
 {
    for (int i = 0; i < fields.size(); i++)
    {
-      auto fes = GetFESpace(fields[i]);
-      const auto R = fes.GetElementRestriction(ElementDofOrdering::NATIVE);
-      const int height = R->Height();
-      fields_e[i + offset].SetSize(height);
-
-      R->Mult(GetGridFunction(fields[i]), fields_e[i + offset]);
+      const auto R = GetElementRestriction(fields[i], ElementDofOrdering::NATIVE);
+      if (R != nullptr)
+      {
+         const int height = R->Height();
+         fields_e[i + field_offset].SetSize(height);
+         R->Mult(GetFieldData(fields[i]), fields_e[i + field_offset]);
+      }
+      else
+      {
+         // const int height = GetTrueVSize(fields[i]);
+         // fields_e[i + field_offset].SetSize(height);
+         fields_e[i + field_offset] = GetFieldData(fields[i]);
+      }
    }
 }
 
@@ -260,17 +431,27 @@ auto enzyme_fwddiff_apply(qf_type qf, arg_type &&args, arg_type &&shadow_args)
    enzyme_args);
 }
 
-template <typename T>
-struct always_false
-{
-   static constexpr bool value = false;
-};
-
 template <typename T1, typename T2>
 void allocate_qf_arg(const T1&, T2&)
 {
    static_assert(always_false<T1>::value,
                  "allocate_qf_arg not implemented for requested type combination");
+}
+
+void allocate_qf_arg(const None &, double &)
+{
+   // no op
+}
+
+void allocate_qf_arg(const None &, tensor<double, 2, 2> &)
+{
+   // no op
+}
+
+template <int length>
+void allocate_qf_arg(const None &, tensor<double, length> &)
+{
+   // no op
 }
 
 void allocate_qf_arg(const Weight &input, double &arg)
@@ -288,7 +469,8 @@ void allocate_qf_arg(const Value &input, Vector &arg)
    arg.SetSize(input.size_on_qp);
 }
 
-void allocate_qf_arg(const Value &, tensor<double, 2> &)
+template <int length>
+void allocate_qf_arg(const Value &, tensor<double, length> &)
 {
    // no op
 }
@@ -303,7 +485,8 @@ void allocate_qf_arg(const Gradient &input, DenseMatrix &arg)
    arg.SetSize(input.size_on_qp / input.vdim);
 }
 
-void allocate_qf_arg(const Gradient &, tensor<double, 2> &)
+template <int length>
+void allocate_qf_arg(const Gradient &, tensor<double, length> &)
 {
    // no op
 }
@@ -352,7 +535,8 @@ void prepare_qf_arg(const DeviceTensor<1> &u, DenseMatrix &arg)
    }
 }
 
-void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, 2> &arg)
+template <int length>
+void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, length> &arg)
 {
    for (int i = 0; i < u.GetShape()[0]; i++)
    {
@@ -367,7 +551,7 @@ void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, dim, vdim> &arg)
    {
       for (int j = 0; j < dim; j++)
       {
-         arg(j, i) = u[(i * vdim) + j];
+         arg(j, i) = u((i * vdim) + j);
       }
    }
 }
@@ -398,17 +582,18 @@ Vector prepare_qf_result(double x)
 
 Vector prepare_qf_result(Vector x) { return x; }
 
-Vector prepare_qf_result(tensor<double, 1> x)
-{
-   Vector r(1);
-   r(0) = x(0);
-   return r;
-}
+// Vector prepare_qf_result(tensor<double, 1> x)
+// {
+//    Vector r(1);
+//    r(0) = x(0);
+//    return r;
+// }
 
-Vector prepare_qf_result(tensor<double, 2> x)
+template <int length>
+Vector prepare_qf_result(tensor<double, length> x)
 {
-   Vector r(2);
-   for (size_t i = 0; i < 2; i++)
+   Vector r(length);
+   for (size_t i = 0; i < length; i++)
    {
       r(i) = x(i);
    }
@@ -531,6 +716,22 @@ void map_field_to_quadrature_data(
          f(qp) = integration_weights(qp);
       }
    }
+   else if constexpr (std::is_same_v<typename std::remove_reference<
+                      decltype(input)>::type,
+                      None>)
+   {
+      const auto B(dtqmaps.B);
+      auto [num_qp, num_dof] = B.GetShape();
+      const int size_on_qp = input.size_on_qp;
+      const int element_offset = element_idx * size_on_qp * num_qp;
+      const auto field = Reshape(field_e.Read() + element_offset,
+                                 size_on_qp * num_qp);
+      auto f = Reshape(&field_qp[0], size_on_qp * num_qp);
+      for (int i = 0; i < size_on_qp * num_qp; i++)
+      {
+         f(i) = field(i);
+      }
+   }
 }
 
 template <int num_qfinputs, typename input_type, std::size_t... i>
@@ -548,22 +749,22 @@ void map_fields_to_quadrature_data(
     ...);
 }
 
-template <typename output_fd_type>
+template <typename output_type>
 void map_quadrature_data_to_fields(Vector &y_e, int element_idx, int num_el,
                                    DeviceTensor<3, double> residual_qp,
-                                   output_fd_type output_fd,
+                                   output_type output,
                                    std::vector<DofToQuadTensors> &dtqmaps,
                                    int test_space_field_idx)
 {
    // assuming the quadrature point residual has to "play nice with
    // the test function"
    if constexpr (std::is_same_v<
-                 typename std::remove_reference<decltype(output_fd)>::type,
+                 typename std::remove_reference<decltype(output)>::type,
                  Value>)
    {
       const auto B(dtqmaps[test_space_field_idx].B);
       const auto [num_qp, num_dof] = B.GetShape();
-      const int vdim = output_fd.vdim;
+      const int vdim = output.vdim;
       auto C = Reshape(&residual_qp(0, 0, element_idx), vdim, num_qp);
       auto y = Reshape(y_e.ReadWrite(), num_dof, vdim, num_el);
       for (int dof = 0; dof < num_dof; dof++)
@@ -581,11 +782,11 @@ void map_quadrature_data_to_fields(Vector &y_e, int element_idx, int num_el,
       }
    }
    else if constexpr (std::is_same_v<typename std::remove_reference<
-                      decltype(output_fd)>::type, Gradient>)
+                      decltype(output)>::type, Gradient>)
    {
       const auto G(dtqmaps[test_space_field_idx].G);
       const auto [num_qp, dim, num_dof] = G.GetShape();
-      const int vdim = output_fd.vdim;
+      const int vdim = output.vdim;
       auto C = Reshape(&residual_qp(0, 0, element_idx), vdim, dim, num_qp);
       auto y = Reshape(y_e.ReadWrite(), num_dof, vdim, num_el);
       for (int dof = 0; dof < num_dof; dof++)
@@ -605,9 +806,17 @@ void map_quadrature_data_to_fields(Vector &y_e, int element_idx, int num_el,
       }
    }
    else if constexpr (std::is_same_v<typename std::remove_reference<
-                      decltype(output_fd)>::type, None>)
+                      decltype(output)>::type, None>)
    {
-      MFEM_ABORT("yup, this one too");
+      const auto B(dtqmaps[test_space_field_idx].B);
+      const auto [num_qp, num_dof] = B.GetShape();
+      const int size_on_qp = output.vdim;
+      auto C = Reshape(&residual_qp(0, 0, element_idx), size_on_qp * num_qp);
+      auto y = Reshape(y_e.ReadWrite(), size_on_qp * num_qp, num_el);
+      for (int i = 0; i < size_on_qp * num_qp; i++)
+      {
+         y(i, element_idx) += C(i);
+      }
    }
    else
    {
@@ -656,10 +865,9 @@ void map_qfarg_to_field(std::vector<Field> &fields,
       }
       else if ((idx = find_name_idx(fields, input.name)) != -1)
       {
-         int sz = GetSizeOnQP(input, fields[idx]);
          input.dim = GetDimension(fields[idx]);
          input.vdim = GetVDim(fields[idx]);
-         input.size_on_qp = sz;
+         input.size_on_qp = GetSizeOnQP(input, fields[idx]);
          map = idx;
       }
       else
@@ -732,6 +940,7 @@ public:
    void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
                            const IntegrationRule &ir, dependency_type dependency)
    {
+      constexpr ElementDofOrdering element_dof_ordering = ElementDofOrdering::NATIVE;
       constexpr size_t num_qfinputs = std::tuple_size_v<input_type>;
       // constexpr size_t num_qfoutputs = std::tuple_size_v<output_type>;
 
@@ -741,39 +950,21 @@ public:
       std::cout << "adding quadrature function with quadrature rule "
                 << "\n";
 
-      const FiniteElementSpace *test_space = nullptr;
       int test_space_field_idx;
       int residual_size_on_qp;
 
       auto output_fd = std::get<0>(qf.outputs);
       if ((test_space_field_idx = find_name_idx(fields, output_fd.name)) != -1)
       {
-         if (test_space == nullptr)
-         {
-            test_space = &GetFESpace(solutions[test_space_field_idx]);
-         }
-         else if (test_space != &GetFESpace(solutions[test_space_field_idx]))
-         {
-            MFEM_ABORT("can't add quadrature function with different test space");
-         }
          residual_size_on_qp =
-            GetSizeOnQP(output_fd, solutions[test_space_field_idx]);
-         int sz = GetSizeOnQP(output_fd, fields[test_space_field_idx]);
+            GetSizeOnQP(output_fd, fields[test_space_field_idx]);
          output_fd.dim = GetDimension(fields[test_space_field_idx]);
          output_fd.vdim = GetVDim(fields[test_space_field_idx]);
-         output_fd.size_on_qp = sz;
+         output_fd.size_on_qp = residual_size_on_qp;
       }
       else
       {
-         if (output_fd.size_on_qp == -1)
-         {
-            MFEM_ABORT("need to set size on quadrature point for test space"
-                       "that doesn't refer to a field");
-         }
-         else
-         {
-            residual_size_on_qp = output_fd.size_on_qp;
-         }
+         MFEM_ABORT("can't figure out residual size on quadrature point level");
       }
 
       std::array<int, num_qfinputs> qfarg_to_field;
@@ -785,19 +976,9 @@ public:
       this->height = 0;
       for (auto &f : solutions)
       {
-         this->height += GetFESpace(f).GetTrueVSize();
+         this->height += GetTrueVSize(f);
       }
-
-      // Since we know the test space (or the lack of) of the integrator, we
-      // know the output size of the whole operator so it can be set now.
-      if (test_space)
-      {
-         this->width = test_space->GetTrueVSize();
-      }
-      else
-      {
-         this->width = residual_size_on_qp * num_qp * num_el;
-      }
+      this->width = residual_size_on_qp * num_qp * num_el;
 
       // Creating this here allows to call GradientMult even if there are no
       // dependent ElementOperators.
@@ -815,14 +996,9 @@ public:
       qf.inputs);
 
       Vector residual_qp_mem(residual_size_on_qp * num_qp * num_el);
-      if (test_space)
       {
-         residual_e.SetSize(
-            test_space->GetElementRestriction(ElementDofOrdering::NATIVE)
-            ->Height());
-      }
-      else
-      {
+         auto R = GetElementRestriction(fields[test_space_field_idx],
+                                        element_dof_ordering);
          residual_e.SetSize(residual_qp_mem.Size());
       }
 
@@ -837,11 +1013,10 @@ public:
       Array<double> integration_weights_mem = ir.GetWeights();
 
       // Duplicate B/G and assume only a single element type for now
-      std::vector<DofToQuad> dtqmaps;
+      std::vector<const DofToQuad*> dtqmaps;
       for (const auto &field : fields)
       {
-         dtqmaps.emplace_back(
-            GetFESpace(field).GetFE(0)->GetDofToQuad(ir, DofToQuad::FULL));
+         dtqmaps.emplace_back(GetDofToQuad(field, ir, DofToQuad::FULL));
       }
 
       residual_integrators.emplace_back(
@@ -852,10 +1027,20 @@ public:
          std::vector<DofToQuadTensors> dtqmaps_tensor;
          for (const auto &map : dtqmaps)
          {
-            dtqmaps_tensor.push_back(
+            if (map != nullptr)
             {
-               Reshape(map.B.Read(), num_qp, map.ndof),
-               Reshape(map.G.Read(), num_qp, dim, map.ndof)});
+               dtqmaps_tensor.push_back(
+               {
+                  Reshape(map->B.Read(), num_qp, map->ndof),
+                  Reshape(map->G.Read(), num_qp, dim, map->ndof)
+               });
+            }
+            else
+            {
+               DeviceTensor<2, const double> B(nullptr, num_qp, num_qp);
+               DeviceTensor<3, const double> G(nullptr, num_qp, dim, num_qp);
+               dtqmaps_tensor.push_back({B, G});
+            }
          }
 
          const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
@@ -869,6 +1054,12 @@ public:
 
          DeviceTensor<1, const double> integration_weights(
             integration_weights_mem.Read(), num_qp);
+
+         // if (fields_e.size() >= 3)
+         // {
+         //    print_vector(fields_e[qfarg_to_field[2]]);
+         //    out << "\n";
+         // }
 
          for (int el = 0; el < num_el; el++)
          {
@@ -886,35 +1077,35 @@ public:
                auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                for (int i = 0; i < residual_size_on_qp; i++)
                {
+                  // out << f_qp(i) << " ";
                   r_qp(i) = f_qp(i);
                }
+               // out << "\n";
             }
 
             // B^T
-            if (test_space_field_idx != -1)
-            {
-               // integrate
-               map_quadrature_data_to_fields(y_e, el, num_el, residual_qp,
-                                             output_fd, dtqmaps_tensor,
-                                             test_space_field_idx);
-            }
-            else
-            {
-               // identity
-               for (size_t i = 0; i < this->Width(); i++)
-               {
-                  y_e(i) = residual_qp_mem(i);
-               }
-            }
+            map_quadrature_data_to_fields(y_e, el, num_el, residual_qp,
+                                          output_fd, dtqmaps_tensor,
+                                          test_space_field_idx);
+
          }
       });
 
-      if (test_space)
+      auto R = GetElementRestriction(fields[test_space_field_idx],
+                                     element_dof_ordering);
+      if (R == nullptr)
       {
-         element_restriction_transpose = [test_space](Vector &r_e, Vector &y)
+         out << "G^T = Identity" << "\n";
+         element_restriction_transpose = [](Vector &r_e, Vector &y)
          {
-            test_space->GetElementRestriction(ElementDofOrdering::NATIVE)
-            ->MultTranspose(r_e, y);
+            y = r_e;
+         };
+      }
+      else
+      {
+         element_restriction_transpose = [R](Vector &r_e, Vector &y)
+         {
+            R->MultTranspose(r_e, y);
          };
       }
 
@@ -949,13 +1140,23 @@ public:
                 num_el](Vector &y_e) mutable
          {
             std::vector<DofToQuadTensors> dtqmaps_tensor;
+            // TODO: make this a function
             for (const auto &map : dtqmaps)
             {
-               dtqmaps_tensor.push_back(
+               if (map != nullptr)
                {
-                  Reshape(map.B.Read(), num_qp, map.ndof),
-                  Reshape(map.G.Read(), num_qp, dim, map.ndof)
-               });
+                  dtqmaps_tensor.push_back(
+                  {
+                     Reshape(map->B.Read(), num_qp, map->ndof),
+                     Reshape(map->G.Read(), num_qp, dim, map->ndof)
+                  });
+               }
+               else
+               {
+                  DeviceTensor<2, const double> B(nullptr, num_qp, num_qp);
+                  DeviceTensor<3, const double> G(nullptr, num_qp, dim, num_qp);
+                  dtqmaps_tensor.push_back({B, G});
+               }
             }
 
             const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
@@ -1030,13 +1231,13 @@ public:
 
    void Mult(const Vector &x, Vector &y) const override
    {
+      MFEM_ASSERT(residual_integrators.size(), "form does not contain any operators");
       // ASSUME T-Vectors == L-Vectors FOR NOW
 
       // P
       // prolongation
 
       // G
-      // TODO: Combine those and use fields?
       element_restriction(solutions, x, fields_e);
       element_restriction(parameters, solutions.size(), fields_e);
 
@@ -1049,20 +1250,11 @@ public:
       }
       // END GPU
 
-      if (element_restriction_transpose)
-      {
-         // G^T
-         element_restriction_transpose(residual_e, y);
-         // P^T
-         // prolongation_transpose
-      }
-      else
-      {
-         // No element_restriction_transpose
-         // -> no test space
-         // -> return quadrature data
-         y = residual_e;
-      }
+      // G^T
+      element_restriction_transpose(residual_e, y);
+
+      // P^T
+      // prolongation_transpose
 
       y.SetSubVector(ess_tdof_list, 0.0);
    }
@@ -1201,46 +1393,6 @@ int test_interpolate_linear_scalar()
    }
 
    return 0;
-}
-
-void print_matrix(DenseMatrix m)
-{
-   out << "{";
-   for (int i = 0; i < m.NumRows(); i++)
-   {
-      out << "{";
-      for (int j = 0; j < m.NumCols(); j++)
-      {
-         out << m(i, j);
-         if (j < m.NumCols() - 1)
-         {
-            out << ", ";
-         }
-      }
-      if (i < m.NumRows() - 1)
-      {
-         out << "}, ";
-      }
-      else
-      {
-         out << "}";
-      }
-   }
-   out << "} ";
-}
-
-void print_vector(Vector v)
-{
-   out << "{";
-   for (int i = 0; i < v.Size(); i++)
-   {
-      out << v(i);
-      if (i < v.Size() - 1)
-      {
-         out << ", ";
-      }
-   }
-   out << "}";
 }
 
 int test_interpolate_gradient_scalar(const int polynomial_order)
@@ -1527,6 +1679,11 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
+   QuadratureSpace qspace(mesh, ir);
+   QuadratureFunction qf(&qspace, dim * dim);
+
+   qf = 0.0;
+
    std::cout << "nqpts = " << ir.GetNPoints() << std::endl;
    std::cout << "ndofs = " << h1fes.GlobalTrueVSize() << std::endl;
 
@@ -1534,71 +1691,98 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
 
    auto pa_setup = [](tensor<double, 2, 2> J, double w)
    {
-      // out << transpose(inv(J)) * det(J) * w << "\n";
-      // return transpose(inv(J)) * det(J) * w;
-      return det(J) * w;
+      return inv(J) * transpose(inv(J)) * det(J) * w;
+      // out << J << "\n";
+      // return J;
    };
 
-   ElementOperator qf
+   ElementOperator eop
    {
-      // quadrature function lambda
       pa_setup,
-      // inputs
       std::tuple{
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
-      // outputs (return values)
       std::tuple{
-         None{"quadrature_data", 1}
+         None{"quadrature_data"}
       }
    };
 
    DifferentiableForm dop_pasetup(
       // Solutions
-      {},
-      // Parameters
+   {
+      {&qf, "quadrature_data"}
+   },
+   // Parameters
    {
       {mesh.GetNodes(), "coordinates"},
    },
    mesh);
 
-   dop_pasetup.AddElementOperator(qf, ir, Independent{});
+   dop_pasetup.AddElementOperator(eop, ir, Independent{});
 
-   Vector x, y(mesh.GetNE() * ir.GetNPoints() * dim * vdim);
-   dop_pasetup.Mult(x, y);
+   out << "setup" << "\n";
+   dop_pasetup.Mult(qf, qf);
 
-   print_vector(y);
-   out << "\n";
-
-   out << "sum: " << y.Sum() << "\n";
-
-   auto pa_apply = [](double qdata)
+   auto pa_apply = [](tensor<double, 2> dudxi, tensor<double, 2, 2> qdata)
    {
-      return 1.0 * qdata;
+      return dudxi * qdata;
    };
 
-   ElementOperator qf_apply
+   ElementOperator eo_apply
    {
-      // quadrature function lambda
       pa_apply,
-      // inputs
       std::tuple{
-         None{"quadrature_data", 1}
+         Gradient{"potential"},
+         None{"quadrature_data"}
       },
-      // outputs (return values)
       std::tuple{
-         Value{"potential"}
+         Gradient{"potential"}
       }
    };
 
-   // DifferentiableForm dop_apply(
-   //    // Solutions
-   //    {},
-   //    // Parameters
-   // {
-   //    {&y, "quadrature_data"},
-   // },
-   // mesh);
+   DifferentiableForm dop_paapply(
+      // Solutions
+   {{&u, "potential"}},
+   // Parameters
+   {
+      {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"},
+   },
+   mesh);
+
+   dop_paapply.AddElementOperator(eo_apply, ir);
+
+   Vector y(u.Size());
+   out << "apply" << "\n";
+   dop_paapply.Mult(u, y);
+
+   out << "gradient" << "\n";
+   {
+      u = 1.0;
+      DenseMatrix J(u.Size());
+      auto &dop_grad = dop_paapply.GetGradient(u);
+
+      Vector y(u.Size());
+      u = 0.0;
+      std::ofstream ostrm("amat_dfem.dat");
+      for (size_t i = 0; i < u.Size(); i++)
+      {
+         u(i) = 1.0;
+         dop_grad.Mult(u, y);
+         J.SetRow(i, y);
+         u(i) = 0.0;
+      }
+      for (size_t i = 0; i < u.Size(); i++)
+      {
+         for (size_t j = 0; j < u.Size(); j++)
+         {
+            ostrm << J(i,j) << " ";
+         }
+         ostrm << "\n";
+      }
+      ostrm.close();
+      // exit(0);
+   }
 
    return 0;
 }
@@ -1619,7 +1803,7 @@ int main(int argc, char *argv[])
    args.AddOption(&refinements, "-r", "--r", "");
    args.ParseCheck();
 
-   int ret;
+   // int ret;
    // ret = test_interpolate_linear_scalar(polynomial_order);
    // ret = test_interpolate_gradient_scalar(polynomial_order);
    // ret = test_interpolate_linear_vector(refinements, polynomial_order);
@@ -1642,8 +1826,7 @@ int main(int argc, char *argv[])
 
    constexpr int vdim = 2;
 
-   test_partial_assembly_setup_qf(mesh, vdim, polynomial_order);
-
+   test_partial_assembly_setup_qf(mesh, 1, polynomial_order);
    // exit(0);
 
    H1_FECollection h1fec(polynomial_order, dim);
