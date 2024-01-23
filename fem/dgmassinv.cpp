@@ -274,27 +274,35 @@ void DGMassInverse::Mult(const Vector &Mu, Vector &u) const
       switch (id)
       {
          case 0x11: return DGMassCGIteration<2,1,1>(Mu, u);
+         case 0x13: return DGMassCGIteration<2,1,3>(Mu, u);
          case 0x22: return DGMassCGIteration<2,2,2>(Mu, u);
+         case 0x25: return DGMassCGIteration<2,2,5>(Mu, u);
          case 0x33: return DGMassCGIteration<2,3,3>(Mu, u);
          case 0x35: return DGMassCGIteration<2,3,5>(Mu, u);
+         case 0x37: return DGMassCGIteration<2,3,7>(Mu, u);
          case 0x44: return DGMassCGIteration<2,4,4>(Mu, u);
          case 0x46: return DGMassCGIteration<2,4,6>(Mu, u);
          case 0x55: return DGMassCGIteration<2,5,5>(Mu, u);
          case 0x57: return DGMassCGIteration<2,5,7>(Mu, u);
          case 0x66: return DGMassCGIteration<2,6,6>(Mu, u);
          case 0x68: return DGMassCGIteration<2,6,8>(Mu, u);
-         default: return DGMassCGIteration<2>(Mu, u); // Fallback
+         default:
+              fprintf(stderr, "warning: DGMassInverse::Mult non-specialized: dim=2; d1d=%d, q1d=%d\n", d1d, q1d);
+              return DGMassCGIteration<2>(Mu, u); // Fallback
       }
    }
    else if (dim == 3)
    {
       switch (id)
       {
+         case 0x12: return DGMassCGIteration<3,1,2>(Mu, u);
          case 0x22: return DGMassCGIteration<3,2,2>(Mu, u);
          case 0x23: return DGMassCGIteration<3,2,3>(Mu, u);
+         case 0x24: return DGMassCGIteration<3,2,4>(Mu, u);
          case 0x33: return DGMassCGIteration<3,3,3>(Mu, u);
          case 0x34: return DGMassCGIteration<3,3,4>(Mu, u);
          case 0x35: return DGMassCGIteration<3,3,5>(Mu, u);
+         case 0x36: return DGMassCGIteration<3,3,6>(Mu, u);
          case 0x44: return DGMassCGIteration<3,4,4>(Mu, u);
          case 0x45: return DGMassCGIteration<3,4,5>(Mu, u);
          case 0x46: return DGMassCGIteration<3,4,6>(Mu, u);
@@ -305,7 +313,9 @@ void DGMassInverse::Mult(const Vector &Mu, Vector &u) const
          case 0x58: return DGMassCGIteration<3,5,8>(Mu, u);
          case 0x66: return DGMassCGIteration<3,6,6>(Mu, u);
          case 0x67: return DGMassCGIteration<3,6,7>(Mu, u);
-         default: return DGMassCGIteration<3>(Mu, u); // Fallback
+         default:
+           fprintf(stderr, "warning: DGMassInverse::Mult non-specialized: dim=3, d1d=%d, q1d=%d\n", d1d, q1d);
+           return DGMassCGIteration<3>(Mu, u); // Fallback
       }
    }
 }
