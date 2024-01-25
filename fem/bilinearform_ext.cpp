@@ -255,9 +255,7 @@ PABilinearFormExtension::PABilinearFormExtension(BilinearForm *form)
 void PABilinearFormExtension::SetupRestrictionOperators(const L2FaceValues m)
 {
    if ( Device::Allows(Backend::CEED_MASK) ) { return; }
-   ElementDofOrdering ordering = UsesTensorBasis(*a->FESpace())?
-                                 ElementDofOrdering::LEXICOGRAPHIC:
-                                 ElementDofOrdering::NATIVE;
+   ElementDofOrdering ordering = GetEVectorOrdering(*a->FESpace());
    elem_restrict = trial_fes->GetElementRestriction(ordering);
    if (elem_restrict)
    {
@@ -303,7 +301,7 @@ void PABilinearFormExtension::SetupRestrictionOperators(const L2FaceValues m)
       std::unordered_map<int,int> f_to_be;
       for (int i = 0; i < mesh.GetNBE(); ++i)
       {
-         const int f = mesh.GetBdrElementEdgeIndex(i);
+         const int f = mesh.GetBdrElementFaceIndex(i);
          f_to_be[f] = i;
       }
       const int nf_bdr = trial_fes->GetNFbyType(FaceType::Boundary);
