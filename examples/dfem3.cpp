@@ -480,15 +480,9 @@ auto create_enzyme_args(qf_args_t qf_args, qf_args_t &qf_shadow_args,
 template <typename qf_type, typename arg_type>
 auto enzyme_fwddiff_apply(qf_type qf, arg_type &&args, arg_type &&shadow_args)
 {
-   // std::cout << "shadow\n"
-   //           << get_type_name<decltype(shadow_args)>() << std::endl;
-
    auto arg_indices =
       std::make_index_sequence<std::tuple_size_v<std::remove_reference_t<arg_type>>> {};
    auto enzyme_args = create_enzyme_args(args, shadow_args, arg_indices);
-
-   // std::cout << "enzyme_args\n"
-   //           << get_type_name<decltype(enzyme_args)>() << std::endl;
 
    return std::apply(
              [&](auto &&...args)
@@ -650,13 +644,6 @@ Vector prepare_qf_result(double x)
 }
 
 Vector prepare_qf_result(Vector x) { return x; }
-
-// Vector prepare_qf_result(tensor<double, 1> x)
-// {
-//    Vector r(1);
-//    r(0) = x(0);
-//    return r;
-// }
 
 template <int length>
 Vector prepare_qf_result(tensor<double, length> x)
@@ -1054,16 +1041,6 @@ public:
       fields_e.resize(solutions.size() + parameters.size());
       directions_e.resize(solutions.size());
    }
-
-   // template <
-   //    typename qf_type,
-   //    typename input_type,
-   //    typename output_type>
-   // void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
-   //                         const IntegrationRule &ir)
-   // {
-   //    AddElementOperator(qf, ir, Dependent{});
-   // }
 
    template <
       typename qf_type,
