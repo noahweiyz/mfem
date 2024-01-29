@@ -980,6 +980,30 @@ void map_qfinput_to_field(std::vector<Field> &fields,
    (f(std::get<i>(inputs), map[i]), ...);
 }
 
+std::vector<DofToQuadTensors> map_dtqmaps(std::vector<const DofToQuad*>
+                                          dtqmaps, int dim)
+{
+   std::vector<DofToQuadTensors> dtqmaps_tensor;
+   for (const auto &map : dtqmaps)
+   {
+      if (map != nullptr)
+      {
+         dtqmaps_tensor.push_back(
+         {
+            Reshape(map->B.Read(), map->nqpt, map->ndof),
+            Reshape(map->G.Read(), map->nqpt, dim, map->ndof)
+         });
+      }
+      else
+      {
+         DeviceTensor<2, const double> B(nullptr, map->nqpt, map->ndof);
+         DeviceTensor<3, const double> G(nullptr, map->nqpt, dim, map->ndof);
+         dtqmaps_tensor.push_back({B, G});
+      }
+   }
+   return dtqmaps_tensor;
+}
+
 template <typename input_type, std::size_t... i>
 void map_inputs_to_memory(std::vector<DeviceTensor<2>> &fields_qp,
                           std::vector<Vector> &fields_qp_mem, int num_qp,
@@ -1163,24 +1187,7 @@ public:
              residual_size_on_qp, test_space_field_idx, output_fd, dtqmaps,
              integration_weights_mem, num_qp, num_el](Vector &y_e) mutable
       {
-         std::vector<DofToQuadTensors> dtqmaps_tensor;
-         for (const auto &map : dtqmaps)
-         {
-            if (map != nullptr)
-            {
-               dtqmaps_tensor.push_back(
-               {
-                  Reshape(map->B.Read(), num_qp, map->ndof),
-                  Reshape(map->G.Read(), num_qp, dim, map->ndof)
-               });
-            }
-            else
-            {
-               DeviceTensor<2, const double> B(nullptr, num_qp, num_qp);
-               DeviceTensor<3, const double> G(nullptr, num_qp, dim, num_qp);
-               dtqmaps_tensor.push_back({B, G});
-            }
-         }
+         auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim);
 
          const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
                                           residual_size_on_qp, num_qp, num_el);
@@ -1188,26 +1195,20 @@ public:
          // Fields interpolated to the quadrature points in the order of
          // quadrature function arguments
          std::vector<DeviceTensor<2>> fields_qp;
-         map_inputs_to_memory(fields_qp, fields_qp_mem, num_qp, qf.inputs,
-                              std::make_index_sequence<num_qfinputs>{});
+         map_inputs_to_memory(
+         fields_qp, fields_qp_mem, num_qp,qf.inputs, std::make_index_sequence<num_qfinputs>{});
 
          DeviceTensor<1, const double> integration_weights(
             integration_weights_mem.Read(), num_qp);
-
-         // if (fields_e.size() >= 3)
-         // {
-         //    print_vector(fields_e[qfinput_to_field[2]]);
-         //    out << "\n";
-         // }
 
          for (int el = 0; el < num_el; el++)
          {
             // B
             // prepare fields on quadrature points
             map_fields_to_quadrature_data<num_qfinputs>(
-               fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
-               integration_weights, qf.inputs,
-               std::make_index_sequence<num_qfinputs> {});
+               fields_qp, el, fields_e,
+               qfinput_to_field, dtqmaps_tensor,
+            integration_weights, qf.inputs, std::make_index_sequence<num_qfinputs> {});
 
             for (int qp = 0; qp < num_qp; qp++)
             {
@@ -1216,10 +1217,8 @@ public:
                auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                for (int i = 0; i < residual_size_on_qp; i++)
                {
-                  // out << f_qp(i) << " ";
                   r_qp(i) = f_qp(i);
                }
-               // out << "\n";
             }
 
             // B^T
@@ -1312,25 +1311,7 @@ public:
                 integration_weights_mem, num_qp,
                 num_el](Vector &y_e) mutable
          {
-            std::vector<DofToQuadTensors> dtqmaps_tensor;
-            // TODO: make this a function
-            for (const auto &map : dtqmaps)
-            {
-               if (map != nullptr)
-               {
-                  dtqmaps_tensor.push_back(
-                  {
-                     Reshape(map->B.Read(), num_qp, map->ndof),
-                     Reshape(map->G.Read(), num_qp, dim, map->ndof)
-                  });
-               }
-               else
-               {
-                  DeviceTensor<2, const double> B(nullptr, num_qp, num_qp);
-                  DeviceTensor<3, const double> G(nullptr, num_qp, dim, num_qp);
-                  dtqmaps_tensor.push_back({B, G});
-               }
-            }
+            auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim);
 
             const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
                                              residual_size_on_qp, num_qp, num_el);
@@ -1339,11 +1320,11 @@ public:
             // function arguments
             std::vector<DeviceTensor<2>> fields_qp;
             map_inputs_to_memory(fields_qp, fields_qp_mem, num_qp, qf.inputs,
-                                 std::make_index_sequence<num_qfinputs>{});
+            std::make_index_sequence<num_qfinputs>{});
 
             std::vector<DeviceTensor<2>> directions_qp;
             map_inputs_to_memory(directions_qp, directions_qp_mem, num_qp, qf.inputs,
-                                 std::make_index_sequence<num_qfinputs>{});
+            std::make_index_sequence<num_qfinputs>{});
 
             DeviceTensor<1, const double> integration_weights(
                integration_weights_mem.Read(), num_qp);
@@ -1355,7 +1336,7 @@ public:
                map_fields_to_quadrature_data<num_qfinputs>(
                   fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
                   integration_weights, qf.inputs,
-                  std::make_index_sequence<num_qfinputs> {});
+               std::make_index_sequence<num_qfinputs> {});
 
                // prepare directions (shadow memory)
                map_fields_to_quadrature_data_conditional<num_qfinputs>(
