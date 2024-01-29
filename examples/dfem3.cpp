@@ -968,23 +968,25 @@ void map_qfinput_to_field(std::vector<Field> &fields,
 }
 
 std::vector<DofToQuadTensors> map_dtqmaps(std::vector<const DofToQuad*>
-                                          dtqmaps, int dim)
+                                          dtqmaps, int dim, int num_qp)
 {
    std::vector<DofToQuadTensors> dtqmaps_tensor;
-   for (const auto &map : dtqmaps)
+   for (auto m : dtqmaps)
    {
-      if (map != nullptr)
+      if (m != nullptr)
       {
          dtqmaps_tensor.push_back(
          {
-            Reshape(map->B.Read(), map->nqpt, map->ndof),
-            Reshape(map->G.Read(), map->nqpt, dim, map->ndof)
+            Reshape(m->B.Read(), m->nqpt, m->ndof),
+            Reshape(m->G.Read(), m->nqpt, dim, m->ndof)
          });
       }
       else
       {
-         DeviceTensor<2, const double> B(nullptr, map->nqpt, map->ndof);
-         DeviceTensor<3, const double> G(nullptr, map->nqpt, dim, map->ndof);
+         // If there is no DofToQuad map available, we assume that the "map"
+         // is identity and therefore maps 1 to 1 from #qp to #qp.
+         DeviceTensor<2, const double> B(nullptr, num_qp, num_qp);
+         DeviceTensor<3, const double> G(nullptr, num_qp, dim, num_qp);
          dtqmaps_tensor.push_back({B, G});
       }
    }
@@ -1164,7 +1166,7 @@ public:
              residual_size_on_qp, test_space_field_idx, output_fd, dtqmaps,
              integration_weights_mem, num_qp, num_el](Vector &y_e) mutable
       {
-         auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim);
+         auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim, num_qp);
 
          const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
                                           residual_size_on_qp, num_qp, num_el);
@@ -1288,7 +1290,7 @@ public:
                 integration_weights_mem, num_qp,
                 num_el](Vector &y_e) mutable
          {
-            auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim);
+            auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim, num_qp);
 
             const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
                                              residual_size_on_qp, num_qp, num_el);
@@ -1456,29 +1458,34 @@ public:
    Array<int> ess_tdof_list;
 };
 
-int test_interpolate_linear_scalar()
+int test_interpolate_linear_scalar(std::string mesh_file,
+                                   int refinements,
+                                   int polynomial_order)
 {
-   constexpr int num_elements = 1;
-   Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
-                                            Element::QUADRILATERAL);
+   Mesh mesh_serial = Mesh(mesh_file);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh_serial.UniformRefinement();
+   }
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
 
    mesh.SetCurvature(1);
    const int dim = mesh.Dimension();
    mesh_serial.Clear();
 
-   int polynomial_order = 1;
    H1_FECollection h1fec(polynomial_order, dim);
    ParFiniteElementSpace h1fes(&mesh, &h1fec);
 
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
+   QuadratureSpace qspace(mesh, ir);
+   QuadratureFunction qf(&qspace);
+
    ParGridFunction f1_g(&h1fes);
 
    auto mass_qf = [](double u, tensor<double, 2, 2> J, double w)
    {
-      out << u << " ";
       return u;
    };
 
@@ -1491,11 +1498,16 @@ int test_interpolate_linear_scalar()
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
       // outputs
-      std::tuple{Value{"primary_variable"}}};
+      std::tuple{None{"quadrature_data"}}};
 
    DifferentiableForm dop(
-   {{&f1_g, "primary_variable"}},
-   {{mesh.GetNodes(), "coordinates"}},
+   {
+      {&f1_g, "primary_variable"}
+   },
+   {
+      {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"}
+   },
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -1510,11 +1522,11 @@ int test_interpolate_linear_scalar()
    FunctionCoefficient f1_c(f1);
    f1_g.ProjectCoefficient(f1_c);
 
-   Vector x(f1_g), y(f1_g.Size());
-   dop.Mult(x, y);
+   Vector x(f1_g);
+   dop.Mult(x, qf);
 
-   out << "\n";
-   for (int e = 0; e < num_elements; e++)
+   Vector f_test(qf.Size());
+   for (int e = 0; e < mesh.GetNE(); e++)
    {
       ElementTransformation *T = mesh.GetElementTransformation(e);
       for (int qp = 0; qp < ir.GetNPoints(); qp++)
@@ -1522,20 +1534,28 @@ int test_interpolate_linear_scalar()
          const IntegrationPoint &ip = ir.IntPoint(qp);
          T->SetIntPoint(&ip);
 
-         double f = f1_c.Eval(*T, ip);
-         out << f << " ";
+         f_test((e * ir.GetNPoints()) + qp) = f1_c.Eval(*T, ip);
       }
+   }
+
+   f_test -= qf;
+   if (f_test.Norml2() > 1e-12)
+   {
+      return 1;
    }
 
    return 0;
 }
 
-int test_interpolate_gradient_scalar(const int polynomial_order)
+int test_interpolate_gradient_scalar(std::string mesh_file,
+                                     int refinements,
+                                     int polynomial_order)
 {
-   constexpr int num_elements = 1;
-   // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
-   //                                          Element::QUADRILATERAL);
-   Mesh mesh_serial = Mesh("../data/skewed-square.mesh");
+   Mesh mesh_serial = Mesh(mesh_file);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh_serial.UniformRefinement();
+   }
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
    mesh.SetCurvature(1);
    const int dim = mesh.Dimension();
@@ -1547,13 +1567,15 @@ int test_interpolate_gradient_scalar(const int polynomial_order)
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
+   QuadratureSpace qspace(mesh, ir);
+   QuadratureFunction qf(&qspace, dim);
+
    ParGridFunction f1_g(&h1fes);
 
    auto mass_qf = [](double u, tensor<double, 2> grad_u, tensor<double, 2, 2> J,
                      double w)
    {
-      out << grad_u * transpose(inv(J)) << " ";
-      return 0.0;
+      return grad_u * inv(J);
    };
 
    ElementOperator mass
@@ -1566,11 +1588,14 @@ int test_interpolate_gradient_scalar(const int polynomial_order)
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
       // outputs
-      std::tuple{Value{"primary_variable"}}};
+      std::tuple{None{"quadrature_data"}}};
 
    DifferentiableForm dop(
    {{&f1_g, "primary_variable"}},
-   {{mesh.GetNodes(), "coordinates"}},
+   {
+      {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"}
+   },
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -1585,11 +1610,11 @@ int test_interpolate_gradient_scalar(const int polynomial_order)
    FunctionCoefficient f1_c(f1);
    f1_g.ProjectCoefficient(f1_c);
 
-   Vector x(f1_g), y(f1_g.Size());
-   dop.Mult(x, y);
+   Vector x(f1_g);
+   dop.Mult(x, qf);
 
-   out << "\n";
-   for (int e = 0; e < num_elements; e++)
+   Vector f_test(qf.Size());
+   for (int e = 0; e < mesh.GetNE(); e++)
    {
       ElementTransformation *T = mesh.GetElementTransformation(e);
       for (int qp = 0; qp < ir.GetNPoints(); qp++)
@@ -1599,34 +1624,28 @@ int test_interpolate_gradient_scalar(const int polynomial_order)
 
          Vector g(dim);
          f1_g.GetGradient(*T, g);
-         out << "{";
-         for (int i = 0; i < dim; i++)
+         for (int d = 0; d < dim; d++)
          {
-            out << g(i);
-            if (i < dim - 1)
-            {
-               out << ", ";
-            }
-            else
-            {
-               out << "} ";
-            }
+            int qpo = qp * dim;
+            int eo = e * (ir.GetNPoints() * dim);
+            f_test(d + qpo + eo) = g(d);
          }
-
-         // out << f1_g.GetValue(*T) << " ";
       }
    }
 
-   out << "\n";
-
+   f_test -= qf;
+   if (f_test.Norml2() > 1e-12)
+   {
+      return 1;
+   }
    return 0;
 }
 
-int test_interpolate_linear_vector(const int refinements, int polynomial_order)
+int test_interpolate_linear_vector(std::string mesh_file, int refinements,
+                                   int polynomial_order)
 {
    constexpr int vdim = 2;
-   Mesh mesh_serial = Mesh::MakeCartesian2D(1, 1,
-                                            Element::QUADRILATERAL);
+   Mesh mesh_serial = Mesh(mesh_file);
    for (int i = 0; i < refinements; i++)
    {
       mesh_serial.UniformRefinement();
@@ -1643,11 +1662,13 @@ int test_interpolate_linear_vector(const int refinements, int polynomial_order)
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
+   QuadratureSpace qspace(mesh, ir);
+   QuadratureFunction qf(&qspace, vdim);
+
    ParGridFunction f1_g(&h1fes);
 
    auto mass_qf = [](tensor<double, vdim> u, tensor<double, 2, 2> J, double w)
    {
-      out << u << " ";
       return u;
    };
 
@@ -1660,11 +1681,14 @@ int test_interpolate_linear_vector(const int refinements, int polynomial_order)
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
       // outputs
-      std::tuple{Value{"primary_variable"}}};
+      std::tuple{None{"quadrature_data"}}};
 
    DifferentiableForm dop(
    {{&f1_g, "primary_variable"}},
-   {{mesh.GetNodes(), "coordinates"}},
+   {
+      {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"}
+   },
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -1680,10 +1704,10 @@ int test_interpolate_linear_vector(const int refinements, int polynomial_order)
    VectorFunctionCoefficient f1_c(vdim, f1);
    f1_g.ProjectCoefficient(f1_c);
 
-   Vector x(f1_g), y(f1_g.Size());
-   dop.Mult(x, y);
+   Vector x(f1_g);
+   dop.Mult(x, qf);
 
-   out << "\n";
+   Vector f_test(qf.Size());
    for (int e = 0; e < mesh.GetNE(); e++)
    {
       ElementTransformation *T = mesh.GetElementTransformation(e);
@@ -1693,30 +1717,26 @@ int test_interpolate_linear_vector(const int refinements, int polynomial_order)
          T->SetIntPoint(&ip);
 
          Vector f(vdim);
-         f1_c.Eval(f, *T, ip);
-         out << "{";
-         for (int i = 0; i < vdim; i++)
+         f1_g.GetVectorValue(*T, ip, f);
+         for (int d = 0; d < vdim; d++)
          {
-            out << f(i);
-            if (i < vdim - 1)
-            {
-               out << ", ";
-            }
-            else
-            {
-               out << "} ";
-            }
+            int qpo = qp * vdim;
+            int eo = e * (ir.GetNPoints() * vdim);
+            f_test(d + qpo + eo) = f(d);
          }
-
       }
-      out << "\n";
    }
 
+   f_test -= qf;
+   if (f_test.Norml2() > 1e-12)
+   {
+      return 1;
+   }
    return 0;
 }
 
-int test_interpolate_gradient_vector(const std::string mesh_file,
-                                     const int refinements,
+int test_interpolate_gradient_vector(std::string mesh_file,
+                                     int refinements,
                                      int polynomial_order)
 {
    constexpr int vdim = 2;
@@ -1725,7 +1745,6 @@ int test_interpolate_gradient_vector(const std::string mesh_file,
    {
       mesh_serial.UniformRefinement();
    }
-
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
    mesh.SetCurvature(1);
    const int dim = mesh.Dimension();
@@ -1737,13 +1756,16 @@ int test_interpolate_gradient_vector(const std::string mesh_file,
    const IntegrationRule &ir =
       IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
+   QuadratureSpace qspace(mesh, ir);
+   QuadratureFunction qf(&qspace, dim * vdim);
+
    ParGridFunction f1_g(&h1fes);
 
    auto mass_qf = [](tensor<double, vdim, 2> grad_u, tensor<double, 2, 2> J,
                      double w)
    {
-      // out << grad_u * transpose(inv(J)) << " ";
-      return grad_u;
+      // out << grad_u * inv(J) << " ";
+      return grad_u * inv(J);
    };
 
    ElementOperator mass
@@ -1755,11 +1777,14 @@ int test_interpolate_gradient_vector(const std::string mesh_file,
          Gradient{"coordinates"},
          Weight{"integration_weight"}},
       // outputs
-      std::tuple{Value{"primary_variable"}}};
+      std::tuple{None{"quadrature_data"}}};
 
    DifferentiableForm dop(
    {{&f1_g, "primary_variable"}},
-   {{mesh.GetNodes(), "coordinates"}},
+   {
+      {mesh.GetNodes(), "coordinates"},
+      {&qf, "quadrature_data"}
+   },
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -1775,10 +1800,10 @@ int test_interpolate_gradient_vector(const std::string mesh_file,
    VectorFunctionCoefficient f1_c(vdim, f1);
    f1_g.ProjectCoefficient(f1_c);
 
-   Vector x(f1_g), y(f1_g.Size());
-   dop.Mult(x, y);
+   Vector x(f1_g);
+   dop.Mult(x, qf);
 
-   out << "\n";
+   Vector f_test(qf.Size());
    for (int e = 0; e < mesh.GetNE(); e++)
    {
       ElementTransformation *T = mesh.GetElementTransformation(e);
@@ -1789,13 +1814,24 @@ int test_interpolate_gradient_vector(const std::string mesh_file,
 
          DenseMatrix g(vdim, dim);
          f1_g.GetVectorGradient(*T, g);
-         g.Symmetrize();
-         DenseMatrix J(dim, dim);
-         print_matrix(T->Jacobian());
+         for (int i = 0; i < vdim; i++)
+         {
+            for (int j = 0; j < dim; j++)
+            {
+               int eo = e * (ir.GetNPoints() * dim * vdim);
+               int qpo = qp * dim * vdim;
+               int idx = (j + (i * dim) + qpo + eo);
+               f_test(idx) = g(i, j);
+            }
+         }
       }
-      out << "\n";
    }
 
+   f_test -= qf;
+   if (f_test.Norml2() > 1e-12)
+   {
+      return 1;
+   }
    return 0;
 }
 
@@ -1939,14 +1975,24 @@ int main(int argc, char *argv[])
    args.AddOption(&refinements, "-r", "--r", "");
    args.ParseCheck();
 
-   // int ret;
-   // ret = test_interpolate_linear_scalar(polynomial_order);
-   // ret = test_interpolate_gradient_scalar(polynomial_order);
-   // ret = test_interpolate_linear_vector(refinements, polynomial_order);
-   // ret = test_interpolate_gradient_vector(mesh_file, refinements,
-   //                                        polynomial_order);
+   int ret;
+   ret = test_interpolate_linear_scalar(mesh_file, refinements, polynomial_order);
+   out << "test_interpolate_linear_scalar";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+   ret = test_interpolate_gradient_scalar(mesh_file, refinements,
+                                          polynomial_order);
+   out << "test_interpolate_gradient_scalar";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+   ret = test_interpolate_linear_vector(mesh_file, refinements, polynomial_order);
+   out << "test_interpolate_linear_vector";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+   ret = test_interpolate_gradient_vector(mesh_file,
+                                          refinements,
+                                          polynomial_order);
+   out << "test_interpolate_gradient_vector";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+   exit(0);
 
-   // exit(0);
 
    // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
    //                                          Element::Type::QUADRILATERAL);
