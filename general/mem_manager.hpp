@@ -603,30 +603,18 @@ private:
 
    template <typename T> friend class Memory;
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive))
-#endif
    /// Host memory type set during the Setup.
    static MemoryType host_mem_type;
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive))
-#endif
    /// Device memory type set during the Setup.
    static MemoryType device_mem_type;
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive))
-#endif
    /// Allow to detect if a global memory manager instance exists.
    static bool exists;
 
    /// Return true if the global memory manager instance exists.
    static bool Exists() { return exists; }
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive))
-#endif
    /// Array defining the dual MemoryType for each MemoryType
    /** The dual of a host MemoryType is a device MemoryType and vice versa: the
        dual of a device MemoryType is a host MemoryType. */
@@ -635,9 +623,6 @@ private:
    /// Update the dual memory type of @a mt to be @a dual_mt.
    static void UpdateDualMemoryType(MemoryType mt, MemoryType dual_mt);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive))
-#endif
    /// True if Configure() was called.
    static bool configured;
 
@@ -658,9 +643,6 @@ private: // Static methods used by the Memory<T> class
    static void *New_(void *h_tmp, size_t bytes, MemoryType h_mt,
                      MemoryType d_mt, unsigned valid_flags, unsigned &flags);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive, enzyme_nofree))
-#endif
    /// Register an external pointer of the given MemoryType.
    /// Return the host pointer.
    static void *Register_(void *ptr, void *h_ptr, size_t bytes, MemoryType mt,
@@ -679,9 +661,6 @@ private: // Static methods used by the Memory<T> class
    static void SetDeviceMemoryType_(void *h_ptr, unsigned flags,
                                     MemoryType d_mt);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_function_like("free")))
-#endif
    /// Un-register and free memory identified by its host pointer.
    static void Delete_(void *h_ptr, MemoryType mt, unsigned flags);
 
@@ -692,23 +671,14 @@ private: // Static methods used by the Memory<T> class
    static bool MemoryClassCheck_(MemoryClass mc, void *h_ptr,
                                  MemoryType h_mt, size_t bytes, unsigned flags);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_function_like("__dynamic_cast")))
-#endif
    /// Return a pointer to the memory identified by the host pointer h_ptr for
    /// access with the given MemoryClass.
    static void *ReadWrite_(void *h_ptr, MemoryType h_mt, MemoryClass mc,
                            size_t bytes, unsigned &flags);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_function_like("__dynamic_cast")))
-#endif
    static const void *Read_(void *h_ptr, MemoryType h_mt,  MemoryClass mc,
                             size_t bytes, unsigned &flags);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_function_like("__dynamic_cast")))
-#endif
    static void *Write_(void *h_ptr, MemoryType h_mt,  MemoryClass mc,
                        size_t bytes, unsigned &flags);
 
@@ -716,16 +686,10 @@ private: // Static methods used by the Memory<T> class
                           size_t alias_bytes, unsigned base_flags,
                           unsigned &alias_flags);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive, enzyme_nofree))
-#endif
    /// Return the type the of the currently valid memory.
    /// If more than one types are valid, return a device type.
    static MemoryType GetDeviceMemoryType_(void *h_ptr, bool alias);
 
-#ifdef MFEM_USE_ENZYME
-   __attribute__((enzyme_inactive, enzyme_nofree))
-#endif
    /// Return the type the of the host memory.
    static MemoryType GetHostMemoryType_(void *h_ptr);
 
@@ -894,6 +858,8 @@ public:
    inline static void* __enzyme_allocation_like2[4] = {(void*)static_cast<void*(*)(void*, size_t, MemoryType, MemoryType, unsigned, unsigned&)>(MemoryManager::New_),
                                                        (void*)1, (void*)"-1,2,4", (void*)MemoryManager::Delete_
                                                       };
+   __attribute__((used))
+   inline static void* __enzyme_function_like[2] = {(void*)MemoryManager::Delete_, (void*)"free"};
 #endif
 };
 

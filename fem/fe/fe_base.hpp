@@ -367,7 +367,6 @@ public:
    /** @brief Evaluate the values of all shape functions of a scalar finite
        element in reference space at the given point @a ip. */
    /** The size (#dof) of the result Vector @a shape must be set in advance. */
-   __attribute__((enzyme_inactive))
    virtual void CalcShape(const IntegrationPoint &ip,
                           Vector &shape) const = 0;
 
@@ -381,7 +380,6 @@ public:
    /** Each row of the result DenseMatrix @a dshape contains the derivatives of
        one shape function. The size (#dof x #dim) of @a dshape must be set in
        advance.  */
-   __attribute__((enzyme_inactive))
    virtual void CalcDShape(const IntegrationPoint &ip,
                            DenseMatrix &dshape) const = 0;
 

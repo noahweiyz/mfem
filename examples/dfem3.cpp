@@ -111,20 +111,47 @@ struct DofToQuadTensors
    DeviceTensor<3, const double> G;
 };
 
-using Field =
-   std::pair<
+struct Field
+{
    std::variant<
    const QuadratureFunction *,
-   const GridFunction *,
-   const ParGridFunction *>,
-   std::string>;
+         const GridFunction *,
+         const ParGridFunction *
+         > data;
+
+   std::string label;
+};
 
 const Vector &GetFieldData(Field &f)
 {
    return *std::visit([](auto&& f) -> const Vector*
    {
       return static_cast<const Vector *>(f);
-   }, f.first);
+   }, f.data);
+}
+
+const Operator *GetProlongationFromField(const Field &f)
+{
+   return std::visit([](auto&& arg) -> const Operator*
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetProlongationMatrix();
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetProlongationMatrix();
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return nullptr;
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetProlongation on type");
+      }
+   }, f.data);
 }
 
 const Operator *GetElementRestriction(const Field &f, ElementDofOrdering o)
@@ -148,7 +175,7 @@ const Operator *GetElementRestriction(const Field &f, ElementDofOrdering o)
       {
          static_assert(always_false_v<T>, "can't use GetElementRestriction on type");
       }
-   }, f.first);
+   }, f.data);
 }
 
 const DofToQuad *GetDofToQuad(const Field &f, const IntegrationRule &ir,
@@ -173,7 +200,31 @@ const DofToQuad *GetDofToQuad(const Field &f, const IntegrationRule &ir,
       {
          static_assert(always_false_v<T>, "can't use GetDofToQuad on type");
       }
-   }, f.first);
+   }, f.data);
+}
+
+int GetVSize(const Field &f)
+{
+   return std::visit([](auto && arg)
+   {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, const GridFunction *>)
+      {
+         return arg->FESpace()->GetVSize();
+      }
+      else if constexpr (std::is_same_v<T, const ParGridFunction *>)
+      {
+         return arg->ParFESpace()->GetVSize();
+      }
+      else if constexpr (std::is_same_v<T, const QuadratureFunction *>)
+      {
+         return arg->Size();
+      }
+      else
+      {
+         static_assert(always_false_v<T>, "can't use GetVSize on type");
+      }
+   }, f.data);
 }
 
 int GetTrueVSize(const Field &f)
@@ -197,7 +248,7 @@ int GetTrueVSize(const Field &f)
       {
          static_assert(always_false_v<T>, "can't use GetTrueVSize on type");
       }
-   }, f.first);
+   }, f.data);
 }
 
 int GetVDim(const Field &f)
@@ -221,7 +272,7 @@ int GetVDim(const Field &f)
       {
          static_assert(always_false_v<T>, "can't use GetVDim on type");
       }
-   }, f.first);
+   }, f.data);
 }
 
 int GetDimension(const Field &f)
@@ -245,7 +296,7 @@ int GetDimension(const Field &f)
       {
          static_assert(always_false_v<T>, "can't use GetDimension on type");
       }
-   }, f.first);
+   }, f.data);
 }
 
 class FieldDescriptor
@@ -332,38 +383,58 @@ ElementOperator(quadrature_function_type, std::tuple<input_types...>,
 -> ElementOperator<quadrature_function_type, std::tuple<input_types...>,
    std::tuple<output_types...>>;
 
-void element_restriction(std::vector<Field> fields, const Vector &x,
-                         std::vector<Vector> &fields_e)
+void prolongation(std::vector<Field> fields, const Vector &x,
+                  std::vector<Vector> &fields_local)
 {
    int offset = 0;
+   for (int i = 0; i < fields.size(); i++)
+   {
+      const auto P = GetProlongationFromField(fields[i]);
+      if (P != nullptr)
+      {
+         const int width = P->Width();
+         const Vector x_i(x.GetData() + offset, width);
+         fields_local[i].SetSize(P->Height());
+
+         P->Mult(x_i, fields_local[i]);
+         offset += width;
+      }
+      else
+      {
+         const int width = GetTrueVSize(fields[i]);
+         fields_local[i].SetSize(width);
+         const Vector x_i(x.GetData() + offset, width);
+         fields_local[i] = x_i;
+         offset += width;
+      }
+   }
+}
+
+void element_restriction(std::vector<Field> fields,
+                         const std::vector<Vector> &fields_local,
+                         std::vector<Vector> &fields_e)
+{
    for (int i = 0; i < fields.size(); i++)
    {
       const auto R = GetElementRestriction(fields[i], ElementDofOrdering::NATIVE);
       if (R != nullptr)
       {
          const int height = R->Height();
-         const Vector x_i(x.GetData() + offset, height);
          fields_e[i].SetSize(height);
-
-         MFEM_ASSERT(x_i.Size() == R->Height(),
-                     "trying to restrict field to elements but input vector "
-                     "given to ::Mult is not the correct size");
-         R->Mult(x_i, fields_e[i]);
-         offset += height;
+         R->Mult(fields_local[i], fields_e[i]);
       }
       else
       {
          const int height = GetTrueVSize(fields[i]);
          fields_e[i].SetSize(height);
-         const Vector x_i(x.GetData() + offset, height);
-         fields_e[i] = x_i;
-         offset += height;
+         fields_e[i] = fields_local[i];
       }
    }
 }
 
-void element_restriction(std::vector<Field> fields, int field_offset,
-                         std::vector<Vector> &fields_e)
+void element_restriction(std::vector<Field> fields,
+                         std::vector<Vector> &fields_e,
+                         int field_offset)
 {
    for (int i = 0; i < fields.size(); i++)
    {
@@ -376,8 +447,6 @@ void element_restriction(std::vector<Field> fields, int field_offset,
       }
       else
       {
-         // const int height = GetTrueVSize(fields[i]);
-         // fields_e[i + field_offset].SetSize(height);
          fields_e[i + field_offset] = GetFieldData(fields[i]);
       }
    }
@@ -738,14 +807,46 @@ template <int num_qfinputs, typename input_type, std::size_t... i>
 void map_fields_to_quadrature_data(
    std::vector<DeviceTensor<2>> &fields_qp, int element_idx,
    const std::vector<Vector> &fields_e,
-   std::array<int, num_qfinputs> qfarg_to_field,
+   std::array<int, num_qfinputs> qfinput_to_field,
    std::vector<DofToQuadTensors> &dtqmaps,
-   DeviceTensor<1, const double> integration_weights, input_type &qfinputs,
+   DeviceTensor<1, const double> integration_weights,
+   input_type &qfinputs,
    std::index_sequence<i...>)
 {
    (map_field_to_quadrature_data(fields_qp[i], element_idx,
-                                 dtqmaps[qfarg_to_field[i]], fields_e[qfarg_to_field[i]],
+                                 dtqmaps[qfinput_to_field[i]], fields_e[qfinput_to_field[i]],
                                  std::get<i>(qfinputs), integration_weights),
+    ...);
+}
+
+template <typename input_type>
+void map_field_to_quadrature_data_conditional(
+   DeviceTensor<2> field_qp, int element_idx, DofToQuadTensors &dtqmaps,
+   const Vector &field_e, input_type &input,
+   DeviceTensor<1, const double> integration_weights,
+   const bool condition)
+{
+   if (condition)
+   {
+      map_field_to_quadrature_data(field_qp, element_idx, dtqmaps, field_e, input,
+                                   integration_weights);
+   }
+}
+
+template <int num_qfinputs, typename input_type, std::size_t... i>
+void map_fields_to_quadrature_data_conditional(
+   std::vector<DeviceTensor<2>> &fields_qp, int element_idx,
+   const std::vector<Vector> &fields_e,
+   const int field_idx,
+   std::vector<DofToQuadTensors> &dtqmaps,
+   DeviceTensor<1, const double> integration_weights,
+   std::array<bool, num_qfinputs> conditions,
+   input_type &qfinputs,
+   std::index_sequence<i...>)
+{
+   (map_field_to_quadrature_data_conditional(fields_qp[i], element_idx,
+                                             dtqmaps[field_idx], fields_e[field_idx],
+                                             std::get<i>(qfinputs), integration_weights, conditions[i]),
     ...);
 }
 
@@ -829,7 +930,7 @@ std::vector<Field>::const_iterator find_name(const std::vector<Field> &fields,
 {
    auto it = std::find_if(fields.begin(), fields.end(), [&](const Field &field)
    {
-      return field.second == input_name;
+      return field.label == input_name;
    });
 
    return it;
@@ -847,9 +948,9 @@ int find_name_idx(const std::vector<Field> &fields,
 }
 
 template <size_t num_qfinputs, typename input_type, std::size_t... i>
-void map_qfarg_to_field(std::vector<Field> &fields,
-                        std::array<int, num_qfinputs> &map, input_type &inputs,
-                        std::index_sequence<i...>)
+void map_qfinput_to_field(std::vector<Field> &fields,
+                          std::array<int, num_qfinputs> &map, input_type &inputs,
+                          std::index_sequence<i...>)
 {
    auto f = [&](auto &input, auto &map)
    {
@@ -923,9 +1024,22 @@ public:
       fields.insert(fields.end(), solutions.begin(), solutions.end());
       fields.insert(fields.end(), parameters.begin(), parameters.end());
 
+      solutions_local.resize(solutions.size());
+      parameters_local.resize(parameters.size());
+      directions_local.resize(solutions.size());
       fields_e.resize(solutions.size() + parameters.size());
       directions_e.resize(solutions.size());
    }
+
+   // template <
+   //    typename qf_type,
+   //    typename input_type,
+   //    typename output_type>
+   // void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
+   //                         const IntegrationRule &ir)
+   // {
+   //    AddElementOperator(qf, ir, Dependent{});
+   // }
 
    template <
       typename qf_type,
@@ -933,17 +1047,6 @@ public:
       typename output_type>
    void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
                            const IntegrationRule &ir)
-   {
-      AddElementOperator(qf, ir, Dependent{});
-   }
-
-   template <
-      typename qf_type,
-      typename input_type,
-      typename output_type,
-      typename dependency_type>
-   void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
-                           const IntegrationRule &ir, dependency_type dependency)
    {
       constexpr ElementDofOrdering element_dof_ordering = ElementDofOrdering::NATIVE;
       constexpr size_t num_qfinputs = std::tuple_size_v<input_type>;
@@ -953,6 +1056,23 @@ public:
       {
          MFEM_ABORT("only one test space allowed at the moment");
       }
+
+      // TODO: This is currently a hack that fixes the first solution
+      // variable to be the dependent variable in the JvP.
+      //
+      // This index is the field that the residual is differentiated wrt.
+      constexpr int primary_variable_idx = 0;
+
+      bool contains_dependent_input = std::apply([&](auto ...input)
+      {
+         auto check_dependency = [&](auto &input)
+         {
+            return solutions.size() &&
+                   (input.name == solutions[primary_variable_idx].label);
+         };
+         return (check_dependency(input) || ...);
+      },
+      qf.inputs);
 
       const int num_el = mesh.GetNE();
       const int num_qp = ir.GetNPoints();
@@ -977,17 +1097,20 @@ public:
          MFEM_ABORT("can't figure out residual size on quadrature point level");
       }
 
-      std::array<int, num_qfinputs> qfarg_to_field;
-      map_qfarg_to_field(fields, qfarg_to_field, qf.inputs,
-                         std::make_index_sequence<num_qfinputs> {});
+      std::array<int, num_qfinputs> qfinput_to_field;
+      map_qfinput_to_field(fields, qfinput_to_field, qf.inputs,
+                           std::make_index_sequence<num_qfinputs> {});
 
       // All solutions T-vector sizes make up the height of the operator, since
       // they are explicitly provided in Mult() for example.
       this->height = 0;
+      int residual_local_size = 0;
       for (auto &f : solutions)
       {
          this->height += GetTrueVSize(f);
+         residual_local_size += GetVSize(f);
       }
+      residual_local.SetSize(residual_local_size);
 
       // TODO: Only works for one test space
       if constexpr (std::is_same_v<typename
@@ -1036,7 +1159,7 @@ public:
       }
 
       residual_integrators.emplace_back(
-         [&, args, qfarg_to_field, fields_qp_mem, residual_qp_mem,
+         [&, args, qfinput_to_field, fields_qp_mem, residual_qp_mem,
              residual_size_on_qp, test_space_field_idx, output_fd, dtqmaps,
              integration_weights_mem, num_qp, num_el](Vector &y_e) mutable
       {
@@ -1073,7 +1196,7 @@ public:
 
          // if (fields_e.size() >= 3)
          // {
-         //    print_vector(fields_e[qfarg_to_field[2]]);
+         //    print_vector(fields_e[qfinput_to_field[2]]);
          //    out << "\n";
          // }
 
@@ -1082,7 +1205,7 @@ public:
             // B
             // prepare fields on quadrature points
             map_fields_to_quadrature_data<num_qfinputs>(
-               fields_qp, el, fields_e, qfarg_to_field, dtqmaps_tensor,
+               fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
                integration_weights, qf.inputs,
                std::make_index_sequence<num_qfinputs> {});
 
@@ -1125,8 +1248,41 @@ public:
          };
       }
 
-      if constexpr (std::is_same_v<dependency_type, Dependent>)
+      auto P = GetProlongationFromField(fields[test_space_field_idx]);
+      if (P == nullptr)
       {
+         out << "P^T = Identity" << "\n";
+         prolongation_transpose = [](Vector &r_local, Vector &y)
+         {
+            y = r_local;
+         };
+      }
+      else
+      {
+         prolongation_transpose = [P](Vector &r_local, Vector &y)
+         {
+            P->MultTranspose(r_local, y);
+         };
+      }
+
+      if (contains_dependent_input)
+      {
+         // Check which qf inputs are dependent on the primary variable
+         std::array<bool, num_qfinputs> qfinput_is_dependent;
+         for (int i = 0; i < qfinput_is_dependent.size(); i++)
+         {
+            if (qfinput_to_field[i] == primary_variable_idx)
+            {
+               qfinput_is_dependent[i] = true;
+               out << "function input " << i << " is dependent on variable "
+                   << fields[qfinput_to_field[i]].label << "\n";
+            }
+            else
+            {
+               qfinput_is_dependent[i] = false;
+            }
+         }
+
          // Allocate memory for directions on quadrature points
          std::vector<Vector> directions_qp_mem;
          std::apply(
@@ -1147,7 +1303,8 @@ public:
          allocate_qf_args(shadow_args, qf.inputs);
 
          jacobian_integrators.emplace_back(
-            [&, args, shadow_args, qfarg_to_field,
+            [&, args, shadow_args, qfinput_to_field,
+                qfinput_is_dependent,
                 fields_qp_mem,
                 directions_qp_mem, residual_qp_mem,
                 residual_size_on_qp,
@@ -1196,25 +1353,19 @@ public:
                // B
                // prepare fields on quadrature points
                map_fields_to_quadrature_data<num_qfinputs>(
-                  fields_qp, el, fields_e, qfarg_to_field, dtqmaps_tensor,
+                  fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
                   integration_weights, qf.inputs,
                   std::make_index_sequence<num_qfinputs> {});
 
-               // TODO: This is currently a hack that fixes the first solution
-               // variable to be the dependent variable in the JvP
-               constexpr int primary_variable_idx = 0;
-
-               map_field_to_quadrature_data(directions_qp[0], el,
-                                            dtqmaps_tensor[primary_variable_idx],
-                                            directions_e[primary_variable_idx],
-                                            std::get<0>(qf.inputs),
-                                            integration_weights);
-
-               // map_field_to_quadrature_data(directions_qp[1], el,
-               //                              dtqmaps_tensor[primary_variable_idx],
-               //                              directions_e[primary_variable_idx],
-               //                              std::get<1>(qf.inputs),
-               //                              integration_weights);
+               // prepare directions (shadow memory)
+               map_fields_to_quadrature_data_conditional<num_qfinputs>(
+                  directions_qp, el,
+                  directions_e, primary_variable_idx,
+                  dtqmaps_tensor,
+                  integration_weights,
+                  qfinput_is_dependent,
+                  qf.inputs,
+                  std::make_index_sequence<num_qfinputs> {});
 
                // D -> D
                for (int qp = 0; qp < num_qp; qp++)
@@ -1248,14 +1399,13 @@ public:
    void Mult(const Vector &x, Vector &y) const override
    {
       MFEM_ASSERT(residual_integrators.size(), "form does not contain any operators");
-      // ASSUME T-Vectors == L-Vectors FOR NOW
 
       // P
-      // prolongation
+      prolongation(solutions, x, solutions_local);
 
       // G
-      element_restriction(solutions, x, fields_e);
-      element_restriction(parameters, solutions.size(), fields_e);
+      element_restriction(solutions, solutions_local, fields_e);
+      element_restriction(parameters, fields_e, solutions.size());
 
       // BEGIN GPU
       // B^T Q B x
@@ -1267,10 +1417,10 @@ public:
       // END GPU
 
       // G^T
-      element_restriction_transpose(residual_e, y);
+      element_restriction_transpose(residual_e, residual_local);
 
       // P^T
-      // prolongation_transpose
+      prolongation_transpose(residual_local, y);
 
       y.SetSubVector(ess_tdof_list, 0.0);
    }
@@ -1283,9 +1433,12 @@ public:
       current_direction_t = x;
       current_direction_t.SetSubVector(ess_tdof_list, 0.0);
 
-      element_restriction(solutions, current_direction_t, directions_e);
-      element_restriction(solutions, current_state_t, fields_e);
-      element_restriction(parameters, solutions.size(), fields_e);
+      prolongation(solutions, current_direction_t, directions_local);
+      prolongation(solutions, current_state_t, solutions_local);
+
+      element_restriction(solutions, directions_local, directions_e);
+      element_restriction(solutions, solutions_local, fields_e);
+      element_restriction(parameters, fields_e, solutions.size());
 
       // BEGIN GPU
       // B^T Q B x
@@ -1299,9 +1452,10 @@ public:
       // END GPU
 
       // G^T
-      element_restriction_transpose(jvp_e, y);
+      element_restriction_transpose(jvp_e, residual_local);
+
       // P^T
-      // prolongation_transpose
+      prolongation_transpose(residual_local, y);
 
       // re-assign the essential degrees of freedom on the final output vector.
       for (int i = 0; i < ess_tdof_list.Size(); i++)
@@ -1327,10 +1481,16 @@ public:
    std::vector<std::function<void(Vector &)>> residual_integrators;
    std::vector<std::function<void(Vector &)>> jacobian_integrators;
    std::function<void(Vector &, Vector &)> element_restriction_transpose;
+   std::function<void(Vector &, Vector &)> prolongation_transpose;
 
-   mutable Vector residual_e;
+   mutable std::vector<Vector> solutions_local;
+   mutable std::vector<Vector> parameters_local;
+   mutable std::vector<Vector> directions_local;
+   mutable Vector residual_local;
+
    mutable std::vector<Vector> fields_e;
    mutable std::vector<Vector> directions_e;
+   mutable Vector residual_e;
 
    std::shared_ptr<JacobianOperator> jacobian_op;
    mutable Vector current_direction_t, current_state_t;
@@ -1344,6 +1504,7 @@ int test_interpolate_linear_scalar()
    Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
                                             Element::QUADRILATERAL);
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+
    mesh.SetCurvature(1);
    const int dim = mesh.Dimension();
    mesh_serial.Clear();
@@ -1734,7 +1895,7 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    },
    mesh);
 
-   dop_pasetup.AddElementOperator(eop, ir, Independent{});
+   dop_pasetup.AddElementOperator(eop, ir);
 
    out << "setup" << "\n";
    Vector zero;
@@ -1832,18 +1993,19 @@ int main(int argc, char *argv[])
    // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
    //                                          Element::Type::QUADRILATERAL);
    Mesh mesh_serial(mesh_file, 1, 1);
-   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
-   mesh.SetCurvature(1);
+   mesh_serial.SetCurvature(1);
    for (int i = 0; i < refinements; i++)
    {
-      mesh.UniformRefinement();
+      mesh_serial.UniformRefinement();
    }
-   const int dim = mesh.Dimension();
+   const int dim = mesh_serial.Dimension();
+
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
    mesh_serial.Clear();
 
    constexpr int vdim = 2;
 
-   test_partial_assembly_setup_qf(mesh, 1, polynomial_order);
+   // test_partial_assembly_setup_qf(mesh, 1, polynomial_order);
    // exit(0);
 
    H1_FECollection h1fec(polynomial_order, dim);
@@ -1874,7 +2036,8 @@ int main(int argc, char *argv[])
 
    VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
 
-   auto linear_elastic = [](tensor<double, 2, 2> dudxi, tensor<double, 2, 2> J,
+   auto linear_elastic = [](tensor<double, 2, 2> dudxi,
+                            tensor<double, 2, 2> J,
                             double w)
    {
       using mfem::internal::tensor;
@@ -2036,7 +2199,7 @@ int main(int argc, char *argv[])
    // // }
 
    dop.AddElementOperator(qf, ir);
-   dop.AddElementOperator(forcing_qf, ir, Independent{});
+   dop.AddElementOperator(forcing_qf, ir);
    dop.SetEssentialTrueDofs(ess_tdof_list);
 
    // {
