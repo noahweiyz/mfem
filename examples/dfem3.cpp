@@ -81,6 +81,14 @@ void print_vector(Vector v)
 }
 
 using mfem::internal::tensor;
+using mfem::internal::dual;
+
+namespace AD
+{
+struct None {};
+struct Enzyme {};
+struct DualType {};
+};
 
 int enzyme_dup;
 int enzyme_dupnoneed;
@@ -478,7 +486,7 @@ auto create_enzyme_args(qf_args_t qf_args, qf_args_t &qf_shadow_args,
 }
 
 template <typename qf_type, typename arg_type>
-auto enzyme_fwddiff_apply(qf_type qf, arg_type &&args, arg_type &&shadow_args)
+auto fwddiff_apply_enzyme(qf_type qf, arg_type &&args, arg_type &&shadow_args)
 {
    auto arg_indices =
       std::make_index_sequence<std::tuple_size_v<std::remove_reference_t<arg_type>>> {};
@@ -489,7 +497,11 @@ auto enzyme_fwddiff_apply(qf_type qf, arg_type &&args, arg_type &&shadow_args)
    {
       using qf_return_type = typename create_function_signature<
                              decltype(&qf_type::operator())>::type::return_type;
+#ifdef MFEM_USE_ENZYME
       return __enzyme_fwddiff<qf_return_type>((void *)+qf, args...);
+#else
+      return 0;
+#endif
    },
    enzyme_args);
 }
@@ -501,28 +513,8 @@ void allocate_qf_arg(const T1&, T2&)
                  "allocate_qf_arg not implemented for requested type combination");
 }
 
-void allocate_qf_arg(const None &, double &)
-{
-   // no op
-}
-
-void allocate_qf_arg(const None &, tensor<double, 2, 2> &)
-{
-   // no op
-}
-
-template <int length>
-void allocate_qf_arg(const None &, tensor<double, length> &)
-{
-   // no op
-}
-
-void allocate_qf_arg(const Weight &input, double &arg)
-{
-   // no op
-}
-
-void allocate_qf_arg(const Value &input, double &arg)
+template <typename interpolation_type>
+void allocate_qf_arg(const interpolation_type &, double &)
 {
    // no op
 }
@@ -530,12 +522,6 @@ void allocate_qf_arg(const Value &input, double &arg)
 void allocate_qf_arg(const Value &input, Vector &arg)
 {
    arg.SetSize(input.size_on_qp);
-}
-
-template <int length>
-void allocate_qf_arg(const Value &, tensor<double, length> &)
-{
-   // no op
 }
 
 void allocate_qf_arg(const Gradient &input, Vector &arg)
@@ -548,18 +534,14 @@ void allocate_qf_arg(const Gradient &input, DenseMatrix &arg)
    arg.SetSize(input.size_on_qp / input.vdim);
 }
 
-template <int length>
-void allocate_qf_arg(const Gradient &, tensor<double, length> &)
+template <typename interpolation_type, typename T, int d1>
+void allocate_qf_arg(const interpolation_type &, tensor<T, d1> &)
 {
    // no op
 }
 
-void allocate_qf_arg(const Gradient &, double &)
-{
-   // no op
-}
-
-void allocate_qf_arg(const Gradient &, tensor<double, 2, 2> &)
+template <typename interpolation_type, typename T, int d1, int d2>
+void allocate_qf_arg(const interpolation_type &, tensor<T, d1, d2> &)
 {
    // no op
 }
@@ -598,8 +580,8 @@ void prepare_qf_arg(const DeviceTensor<1> &u, DenseMatrix &arg)
    }
 }
 
-template <int length>
-void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, length> &arg)
+template <typename T, int length>
+void prepare_qf_arg(const DeviceTensor<1> &u, tensor<T, length> &arg)
 {
    for (int i = 0; i < u.GetShape()[0]; i++)
    {
@@ -607,8 +589,8 @@ void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, length> &arg)
    }
 }
 
-template <int dim, int vdim>
-void prepare_qf_arg(const DeviceTensor<1> &u, tensor<double, dim, vdim> &arg)
+template <typename T, int dim, int vdim>
+void prepare_qf_arg(const DeviceTensor<1> &u, tensor<T, dim, vdim> &arg)
 {
    for (int i = 0; i < vdim; i++)
    {
@@ -670,11 +652,46 @@ Vector prepare_qf_result(tensor<double, 2, 2> x)
    return r;
 }
 
+Vector prepare_qf_result(tensor<dual<double, double>, 2, 2> x)
+{
+   Vector r(4);
+   for (size_t i = 0; i < 2; i++)
+   {
+      for (size_t j = 0; j < 2; j++)
+      {
+         // TODO: Careful with the indices here!
+         r(j + (i * 2)) = get_value(x(j, i));
+      }
+   }
+   return r;
+}
+
 template <typename T>
 Vector prepare_qf_result(T)
 {
    static_assert(always_false<T>::value,
                  "prepare_qf_result not implemented for result type");
+}
+
+template <typename T>
+Vector prepare_qf_result_dualtype_gradient(T)
+{
+   static_assert(always_false<T>::value,
+                 "prepare_qf_result_dualtype_gradient not implemented for result type");
+}
+
+Vector prepare_qf_result_dualtype_gradient(tensor<dual<double, double>, 2, 2> x)
+{
+   Vector r(4);
+   for (size_t i = 0; i < 2; i++)
+   {
+      for (size_t j = 0; j < 2; j++)
+      {
+         // TODO: Careful with the indices here!
+         r(j + (i * 2)) = get_gradient(x(j, i));
+      }
+   }
+   return r;
 }
 
 template <typename qf_type, typename qf_args>
@@ -688,12 +705,12 @@ auto apply_qf(const qf_type &qf, qf_args &args, std::vector<DeviceTensor<2>> &u,
 }
 
 template <typename qf_type, typename qf_args>
-auto apply_qf_fwddiff(const qf_type &qf,
-                      qf_args &args,
-                      std::vector<DeviceTensor<2>> &u,
-                      qf_args &shadow_args,
-                      std::vector<DeviceTensor<2>> &v,
-                      int qp)
+auto apply_qf_fwddiff_enzyme(const qf_type &qf,
+                             qf_args &args,
+                             std::vector<DeviceTensor<2>> &u,
+                             qf_args &shadow_args,
+                             std::vector<DeviceTensor<2>> &v,
+                             int qp)
 {
    prepare_qf_args(qf, u, args, qp,
                    std::make_index_sequence<std::tuple_size_v<qf_args>> {});
@@ -701,7 +718,59 @@ auto apply_qf_fwddiff(const qf_type &qf,
    prepare_qf_args(qf, v, shadow_args, qp,
                    std::make_index_sequence<std::tuple_size_v<qf_args>> {});
 
-   return prepare_qf_result(enzyme_fwddiff_apply(qf, args, shadow_args));
+   return prepare_qf_result(fwddiff_apply_enzyme(qf, args, shadow_args));
+}
+
+template <typename T>
+void prepare_qf_arg_dual(const DeviceTensor<1> &, T &)
+{
+   // noop
+}
+
+template <int dim, int vdim>
+void prepare_qf_arg_dual(const DeviceTensor<1> &v,
+                         tensor<dual<double, double>, dim, vdim> &arg)
+{
+   for (int i = 0; i < vdim; i++)
+   {
+      for (int j = 0; j < dim; j++)
+      {
+         arg(j, i).gradient = v((i * vdim) + j);
+      }
+   }
+}
+
+template <typename arg_type>
+void prepare_qf_arg_dual(const DeviceTensor<2> &v, arg_type &arg, int qp)
+{
+   const auto u_qp = Reshape(&v(0, qp), v.GetShape()[0]);
+   prepare_qf_arg_dual(u_qp, arg);
+}
+
+template <typename qf_type, typename qf_args, std::size_t... i>
+void prepare_qf_args_dual(const qf_type &qf, std::vector<DeviceTensor<2>> &v,
+                          qf_args &args, int qp, std::index_sequence<i...>)
+{
+   // we have several options here
+   // - reinterpret_cast
+   // - memcpy (copy data of u -> arg with overloading operator= for example)
+   (prepare_qf_arg_dual(v[i], std::get<i>(args), qp), ...);
+}
+
+template <typename qf_type, typename qf_args>
+auto apply_qf_fwddiff_dualtype(const qf_type &qf,
+                               qf_args &args,
+                               std::vector<DeviceTensor<2>> &u,
+                               std::vector<DeviceTensor<2>> &v,
+                               int qp)
+{
+   prepare_qf_args(qf, u, args, qp,
+                   std::make_index_sequence<std::tuple_size_v<qf_args>> {});
+
+   prepare_qf_args_dual(qf, v, args, qp,
+                        std::make_index_sequence<std::tuple_size_v<qf_args>> {});
+
+   return prepare_qf_result_dualtype_gradient(std::apply(qf, args));
 }
 
 template <typename input_type>
@@ -1045,12 +1114,18 @@ public:
    }
 
    template <
+      typename ad_method = AD::Enzyme,
       typename qf_type,
       typename input_type,
-      typename output_type>
+      typename output_type
+      >
    void AddElementOperator(ElementOperator<qf_type, input_type, output_type> &qf,
                            const IntegrationRule &ir)
    {
+#ifndef MFEM_USE_ENZYME
+      static_assert(!std::is_same<ad_method, AD::Enzyme>(),
+                    "AD configuration needs MFEM to be compiled with LLVM/Enzyme");
+#endif
       constexpr ElementDofOrdering element_dof_ordering = ElementDofOrdering::NATIVE;
       constexpr size_t num_qfinputs = std::tuple_size_v<input_type>;
       constexpr size_t num_qfoutputs = std::tuple_size_v<output_type>;
@@ -1243,6 +1318,11 @@ public:
          };
       }
 
+      if constexpr (std::is_same<ad_method, AD::None> {})
+      {
+         return;
+      }
+
       if (contains_dependent_input)
       {
          // Check which qf inputs are dependent on the primary variable
@@ -1330,13 +1410,26 @@ public:
                // D -> D
                for (int qp = 0; qp < num_qp; qp++)
                {
-                  auto f_qp = apply_qf_fwddiff(qf.func, args, fields_qp, shadow_args,
-                                               directions_qp, qp);
-
-                  auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-                  for (int i = 0; i < residual_size_on_qp; i++)
+                  if constexpr (std::is_same<ad_method, AD::Enzyme> {})
                   {
-                     r_qp(i) = f_qp(i);
+                     auto f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
+                                                         directions_qp, qp);
+
+                     auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
+                     for (int i = 0; i < residual_size_on_qp; i++)
+                     {
+                        r_qp(i) = f_qp(i);
+                     }
+                  }
+                  else if constexpr (std::is_same<ad_method, AD::DualType> {})
+                  {
+                     auto f_qp = apply_qf_fwddiff_dualtype(qf.func, args, fields_qp,
+                                                           directions_qp, qp);
+                     auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
+                     for (int i = 0; i < residual_size_on_qp; i++)
+                     {
+                        r_qp(i) = f_qp(i);
+                     }
                   }
                }
 
@@ -1991,8 +2084,6 @@ int main(int argc, char *argv[])
                                           polynomial_order);
    out << "test_interpolate_gradient_vector";
    ret ? out << " FAILURE\n" : out << " OK\n";
-   exit(0);
-
 
    // Mesh mesh_serial = Mesh::MakeCartesian2D(num_elements, num_elements,
    //                                          Element::Type::QUADRILATERAL);
@@ -2040,7 +2131,7 @@ int main(int argc, char *argv[])
 
    VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
 
-   auto linear_elastic = [](tensor<double, 2, 2> dudxi,
+   auto linear_elastic = [](tensor<dual<double, double>, 2, 2> dudxi,
                             tensor<double, 2, 2> J,
                             double w)
    {
@@ -2055,7 +2146,8 @@ int main(int argc, char *argv[])
       static constexpr auto I = IsotropicIdentity<2>();
       auto eps = sym(dudxi * inv(J));
       auto JxW = transpose(inv(J)) * det(J) * w;
-      return (lambda * tr(eps) * I + 2.0 * mu * eps) * JxW;
+      auto r = (lambda * tr(eps) * I + 2.0 * mu * eps) * JxW;
+      return r;
    };
 
    ElementOperator qf
@@ -2106,132 +2198,9 @@ int main(int argc, char *argv[])
    },
    mesh);
 
-   // auto exact_solution = [](const Vector &coords, Vector &u)
-   // {
-   //    const double x = coords(0);
-   //    const double y = coords(1);
-   //    u(0) = cos(y)+sin(x);
-   //    u(1) = sin(x)-cos(y);
-   // };
-
-   // VectorFunctionCoefficient exact_solution_coeff(vdim, exact_solution);
-
-   // auto scalar_diffusion = [](tensor<double, 2, 2> grad_u,
-   //                            tensor<double, 2, 2> J, double w)
-   // {
-   //    auto r = grad_u * inv(J) * transpose(inv(J)) * det(J) * w;
-   //    return r;
-   // };
-
-   // ElementOperator qf
-   // {
-   //    scalar_diffusion,
-   //    // inputs
-   //    std::tuple{
-   //       Gradient{"potential"},
-   //       Gradient{"coordinates"},
-   //       Weight{"integration_weight"}},
-   //    // outputs
-   //    std::tuple{
-   //       Gradient{"potential"}
-   //    }
-   // };
-
-   // ElementOperator forcing_qf
-   // {
-   //    [](tensor<double, 2> coords, tensor<double, 2, 2> J, double w)
-   //    {
-   //       const double x = coords(0);
-   //       const double y = coords(1);
-   //       const double f0 = cos(y)+sin(x);
-   //       const double f1 = sin(x)-cos(y);
-   //       return tensor<double, 2> {-f0, -f1} * det(J) * w;
-   //    },
-   //    // inputs
-   //    std::tuple{
-   //       Value{"coordinates"},
-   //       Gradient{"coordinates"},
-   //       Weight{"integration_weight"}},
-   //    // outputs
-   //    std::tuple{
-   //       Value{"potential"}}
-   // };
-
-   // // auto mass_qf = [](tensor<double, 2> u, tensor<double, 2, 2> grad_u,
-   // //                   tensor<double, 2, 2> J, double w)
-   // // {
-   // //    return u * det(J) * w;
-   // // };
-
-   // // ElementOperator mass
-   // // {
-   // //    mass_qf,
-   // //    // inputs
-   // //    std::tuple{
-   // //       Value{"potential"},
-   // //       Gradient{"potential"},
-   // //       Gradient{"coordinates"},
-   // //       Weight{"integration_weight"}},
-   // //    // outputs
-   // //    std::tuple{Value{"potential"}}};
-
-   // DifferentiableForm dop(
-   //    // Solutions
-   // {
-   //    {&u, "potential"},
-   // },
-   // // Parameters
-   // {
-   //    {mesh.GetNodes(), "coordinates"},
-   // },
-   // mesh);
-
-   // // auto J = Reshape(mesh.GetGeometricFactors(ir,
-   // //                                           GeometricFactors::JACOBIANS)->J.Read(), ir.GetNPoints(), dim, dim, 1);
-
-   // // for (int i = 0; i < ir.GetNPoints(); i++)
-   // // {
-   // //    for (int c = 0; c < dim; c++)
-   // //    {
-   // //       for (int r = 0; r < dim; r++)
-   // //       {
-   // //          printf("%+.2f ", J(i, r, c, 0));
-   // //       }
-   // //       printf("\n");
-   // //    }
-   // //    printf("\n");
-   // // }
-
-   dop.AddElementOperator(qf, ir);
-   dop.AddElementOperator(forcing_qf, ir);
+   dop.AddElementOperator<AD::Enzyme>(qf, ir);
+   dop.AddElementOperator<AD::None>(forcing_qf, ir);
    dop.SetEssentialTrueDofs(ess_tdof_list);
-
-   // {
-   //    DenseMatrix J(u.Size());
-   //    u.ProjectCoefficient(exact_solution_coeff);
-   //    auto &dop_grad = dop.GetGradient(u);
-
-   //    Vector y(u.Size());
-   //    u = 0.0;
-   //    std::ofstream ostrm("amat_dfem.dat");
-   //    for (size_t i = 0; i < u.Size(); i++)
-   //    {
-   //       u(i) = 1.0;
-   //       dop_grad.Mult(u, y);
-   //       J.SetRow(i, y);
-   //       u(i) = 0.0;
-   //    }
-   //    for (size_t i = 0; i < u.Size(); i++)
-   //    {
-   //       for (size_t j = 0; j < u.Size(); j++)
-   //       {
-   //          ostrm << J(i,j) << " ";
-   //       }
-   //       ostrm << "\n";
-   //    }
-   //    ostrm.close();
-   //    // exit(0);
-   // }
 
    GMRESSolver gmres(MPI_COMM_WORLD);
    gmres.SetRelTol(1e-12);
@@ -2250,10 +2219,6 @@ int main(int argc, char *argv[])
    u.ProjectBdrCoefficient(exact_solution_coeff, ess_bdr);
    Vector x;
    u.GetTrueDofs(x);
-   Vector y(x.Size());
-
-   // dop.Mult(x, y);
-   // exit(0);
 
    Vector zero;
    newton.Mult(zero, x);
@@ -2261,28 +2226,6 @@ int main(int argc, char *argv[])
    u.Distribute(x);
 
    std::cout << "|u-u_ex|_L2 = " << u.ComputeL2Error(exact_solution_coeff) << "\n";
-
-   // if (true)
-   // {
-   //    char vishost[] = "localhost";
-   //    int  visport   = 19916;
-   //    {
-   //       socketstream sol_sock(vishost, visport);
-   //       sol_sock.precision(8);
-   //       sol_sock << "solution\n" << mesh << u << std::flush;
-   //    }
-   //    {
-   //       g.ProjectCoefficient(exact_solution_coeff);
-   //       for (int i = 0; i < g.Size(); i++)
-   //       {
-   //          g(i) = abs(g(i) - u(i));
-   //       }
-
-   //       socketstream sol_sock(vishost, visport);
-   //       sol_sock.precision(8);
-   //       sol_sock << "solution\n" << mesh << g << std::flush;
-   //    }
-   // }
 
    return 0;
 }
