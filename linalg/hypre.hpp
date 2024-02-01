@@ -1038,7 +1038,6 @@ protected:
 
 public:
    /** Hypre smoother types:
-      -1    = Undefined, replaced with DefaultType() in constructors
        0    = Jacobi
        1    = l1-scaled Jacobi
        2    = l1-scaled block Gauss-Seidel/SSOR
@@ -1049,18 +1048,13 @@ public:
        16   = Chebyshev
        1001 = Taubin polynomial smoother
        1002 = FIR polynomial smoother. */
-   enum Type { Undefined = -1, Jacobi = 0, l1Jacobi = 1, l1GS = 2, l1GStr = 4, lumpedJacobi = 5,
+   enum Type { Jacobi = 0, l1Jacobi = 1, l1GS = 2, l1GStr = 4, lumpedJacobi = 5,
                GS = 6, OPFS = 10, Chebyshev = 16, Taubin = 1001, FIR = 1002
              };
 
-   Type DefaultType()
-   {
-      return HypreUsingGPU() ? l1Jacobi : l1GS;
-   }
-
    HypreSmoother();
 
-   HypreSmoother(const HypreParMatrix &A_, int type = Undefined,
+   HypreSmoother(const HypreParMatrix &A_, int type = DefaultType(),
                  int relax_times = 1, double relax_weight = 1.0,
                  double omega = 1.0, int poly_order = 2,
                  double poly_fraction = .3, int eig_est_cg_iter = 10);
@@ -1106,6 +1100,9 @@ public:
 
    /// Apply transpose of the smoother to relax the linear system Ax=b
    virtual void MultTranspose(const Vector &b, Vector &x) const;
+
+   /// Return default smoother type for configuration
+   static Type DefaultType() { return HypreUsingGPU() ? l1Jacobi : l1GS; }
 
    virtual ~HypreSmoother();
 };

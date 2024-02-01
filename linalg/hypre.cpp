@@ -88,12 +88,12 @@ void Hypre::SetDefaultOptions()
 
    // TODO 23/11/28: introduced in https://github.com/hypre-space/hypre/pull/962,
    //                not yet in a release
-   // #if MFEM_HYPRE_VERSION >= 23100
-   // if (mfem::Device::Allows(mfem::Backend::DEVICE_MASK))
-   // {
-   //    HYPRE_DeviceInitialize();
-   // }
-   // #endif
+#if MFEM_HYPRE_VERSION >= 23100
+   if (mfem::Device::Allows(mfem::Backend::DEVICE_MASK))
+   {
+      HYPRE_DeviceInitialize();
+   }
+#endif
 
    // Use GPU-based random number generator (default)
    // HYPRE_SetUseGpuRand(1);
@@ -3497,7 +3497,7 @@ HypreSmoother::HypreSmoother(const HypreParMatrix &A_, int type_,
                              double omega_, int poly_order_,
                              double poly_fraction_, int eig_est_cg_iter_)
 {
-   type = (type_ == -1) ? DefaultType() : type_;
+   type = type_;
    relax_times = relax_times_;
    relax_weight = relax_weight_;
    omega = omega_;
