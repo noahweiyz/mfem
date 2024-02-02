@@ -40,6 +40,8 @@ protected:
    OperatorHandle fw_t_oper; ///< Forward true-dof operator
    OperatorHandle bw_t_oper; ///< Backward true-dof operator
 
+   bool use_device;
+
 #ifdef MFEM_USE_MPI
    bool parallel;
 #endif
@@ -64,6 +66,8 @@ public:
 
    /// Virtual destructor
    virtual ~GridTransfer() { }
+
+   void UseDevice(bool device) { use_device = device;}
 
    /** @brief Set the desired Operator::Type for the construction of all
        operators defined by the underlying transfer algorithm. */
@@ -206,6 +210,11 @@ protected:
                          const FiniteElement& fe_lor, ElementTransformation* el_tr,
                          IntegrationPointTransformation& ip_tr,
                          DenseMatrix& M_mixed_el) const;
+
+     void ElemMixedMass(Geometry::Type geom, const FiniteElement& fe_ho,
+                        const FiniteElement& fe_lor, ElementTransformation* el_tr,
+                        IntegrationPointTransformation& ip_tr,
+                        DenseMatrix& B_L, DenseMatrix& B_H) const;
    };
 
    /** Class for projection operator between a L2 high-order finite element
@@ -219,11 +228,17 @@ protected:
       // arrays. The entries of the i'th high-order element are stored at the
       // index given by offsets[i].
       mutable Array<double> R, P;
+      mutable Array<double> R_ea, P_ea;
       Array<int> offsets;
 
    public:
       L2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
                           const FiniteElementSpace& fes_lor_);
+
+     /*Same as above but assembles and stores R_ea, P_ea */
+     void DeviceL2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
+                                    const FiniteElementSpace& fes_lor_);     
+     
       /// Maps <tt>x</tt>, primal field coefficients defined on a coarse mesh
       /// with a higher order L2 finite element space, to <tt>y</tt>, primal
       /// field coefficients defined on a refined mesh with a low order L2
@@ -390,7 +405,7 @@ public:
 
    virtual bool SupportsBackwardsOperator() const;
 private:
-   void BuildF();
+   void BuildF(bool use_device);
 };
 
 /// Matrix-free transfer operator between finite element spaces

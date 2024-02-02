@@ -14,6 +14,7 @@
 
 #include "../config/config.hpp"
 #include "../general/globals.hpp"
+#include "../general/forall.hpp"
 #include "matrix.hpp"
 
 namespace mfem
@@ -1282,6 +1283,17 @@ void BatchLUFactor(DenseTensor &Mlu, Array<int> &P, const double TOL = 0.0);
     dimension m x n. */
 void BatchLUSolve(const DenseTensor &Mlu, const Array<int> &P, Vector &X);
 
+
+void BatchLUFactor(const int m, const int len,
+                   mfem::Vector &A, mfem::Array<int> &P);
+
+void BatchLUSolve(mfem::Vector &Minv, int m, int NE, mfem::Array<int> &P, mfem::Vector &X);
+
+void BatchInverseMatrix(const mfem::Vector &LU,
+                        const int m,
+                        const int NE,
+                        const mfem::Array<int> &P,
+                        mfem::Vector &INV);
 
 // Inline methods
 
