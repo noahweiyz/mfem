@@ -1,3 +1,4 @@
+#include "linalg/densemat.hpp"
 #include <algorithm>
 #include <cassert>
 #include <functional>
@@ -78,6 +79,7 @@ void print_vector(Vector v)
       }
    }
    out << "}";
+   out << "\n";
 }
 
 using mfem::internal::tensor;
@@ -1279,7 +1281,6 @@ public:
             map_quadrature_data_to_fields(y_e, el, num_el, residual_qp,
                                           output_fd, dtqmaps_tensor,
                                           test_space_field_idx);
-
          }
       });
 
@@ -1332,7 +1333,7 @@ public:
             if (qfinput_to_field[i] == primary_variable_idx)
             {
                qfinput_is_dependent[i] = true;
-               out << "function input " << i << " is dependent on variable "
+               out << "function input " << i << " is dependent on "
                    << fields[qfinput_to_field[i]].label << "\n";
             }
             else
@@ -1410,26 +1411,21 @@ public:
                // D -> D
                for (int qp = 0; qp < num_qp; qp++)
                {
+                  Vector f_qp;
+                  auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                   if constexpr (std::is_same<ad_method, AD::Enzyme> {})
                   {
-                     auto f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
-                                                         directions_qp, qp);
-
-                     auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-                     for (int i = 0; i < residual_size_on_qp; i++)
-                     {
-                        r_qp(i) = f_qp(i);
-                     }
+                     f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
+                                                    directions_qp, qp);
                   }
                   else if constexpr (std::is_same<ad_method, AD::DualType> {})
                   {
-                     auto f_qp = apply_qf_fwddiff_dualtype(qf.func, args, fields_qp,
-                                                           directions_qp, qp);
-                     auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-                     for (int i = 0; i < residual_size_on_qp; i++)
-                     {
-                        r_qp(i) = f_qp(i);
-                     }
+                     f_qp = apply_qf_fwddiff_dualtype(qf.func, args, fields_qp,
+                                                      directions_qp, qp);
+                  }
+                  for (int i = 0; i < residual_size_on_qp; i++)
+                  {
+                     r_qp(i) = f_qp(i);
                   }
                }
 
@@ -2130,6 +2126,79 @@ int main(int argc, char *argv[])
    };
 
    VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
+
+   // Objective function
+   {
+      auto objective = [](tensor<double, 2> u, double rho,
+                          tensor<double, 2, 2> J,
+                          double w)
+      {
+         return sqnorm(u) * det(J) * w;
+      };
+
+      QuadratureSpace qspace(mesh, ir);
+      QuadratureFunction qdata(&qspace);
+
+      ElementOperator objective_eop
+      {
+         objective,
+         std::tuple{
+            Value{"displacement"},
+            Value{"density"},
+            Gradient{"coordinates"},
+            Weight{"integration_weight"}},
+         // outputs (return values)
+         std::tuple{
+            None{"quadrature_data"}
+         }
+      };
+
+      DifferentiableForm dop(
+      {
+         {&u, "displacement"},
+      },
+      {
+         {mesh.GetNodes(), "coordinates"},
+         {&rho, "density"},
+         {&qdata, "quadrature_data"}
+      },
+      mesh);
+
+      dop.AddElementOperator(objective_eop, ir);
+
+      u.ProjectCoefficient(exact_solution_coeff);
+      Vector zero;
+
+      // finite difference test
+      DenseMatrix dfdu(qdata.Size(), u.Size());
+      dop.Mult(u, qdata);
+      Vector fx(qdata);
+      // out << "g: " << fx << "\n";
+      print_vector(fx);
+      out << "\n";
+
+      for (int i = 0; i < u.Size(); i++)
+      {
+         double h = 1e-6;
+         u(i) += h;
+         dop.Mult(u, qdata);
+         Vector col(qdata);
+         col -= fx;
+         col /= h;
+         u(i) -= h;
+         dfdu.SetCol(i, col);
+      }
+
+      Vector du(u.Size());
+      du.Randomize(1245);
+      Vector df(qdata.Size());
+      dfdu.Mult(du, df);
+      print_vector(df);
+
+      auto &dfdu_op = dop.GetGradient(u);
+      dfdu_op.Mult(du, df);
+      print_vector(df);
+   }
 
    auto linear_elastic = [](tensor<dual<double, double>, 2, 2> dudxi,
                             tensor<double, 2, 2> J,
