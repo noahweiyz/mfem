@@ -385,6 +385,8 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
       DenseMatrix R_iho(&R[offsets[iho]], ndof_lor*nref, ndof_ho);
 
       DenseMatrix Minv_lor(ndof_lor*nref, ndof_lor*nref);
+
+      //ndof_lor x nref x ndof_ho
       DenseMatrix M_mixed(ndof_lor*nref, ndof_ho);
 
       MassIntegrator mi;
@@ -435,12 +437,12 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
 
          }
          //R_iho = M_mixed_el;
-         
+
       }
-      
+
       mfem::Mult(Minv_lor, M_mixed, R_iho);
-      
-      if(iho == 0 & false) {
+
+      if(iho == 0 && false) {
         for(int i=0; i<Minv_lor.Height(); ++i) {
           for(int j=0; j<Minv_lor.Width(); ++j) {
             std::cout<<Minv_lor(i, j)<<" ";
@@ -449,7 +451,8 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
         }
       }
 
-      if(iho == 0) {
+      if(iho < 3 && false) {
+        std::cout<<"iho = "<<iho<<std::endl;
         std::cout<<"Minv_lor"<<std::endl;
         //Minv_lor.Print();
         for(int i=0; i<Minv_lor.Height(); ++i) {
@@ -457,7 +460,7 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
             std::cout<<Minv_lor(i, j)<<" ";
           }
           std::cout<<""<<std::endl;
-        }        
+        }
 
         std::cout<<"M_mixed"<<std::endl;
         //M_mixed.Print();
@@ -466,12 +469,19 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
             std::cout<<M_mixed(i, j)<<" ";
           }
           std::cout<<""<<std::endl;
-        }                
+        }
 
-        std::cout<<"R_iho"<<std::endl;
-        R_iho.Print();
+        std::cout<<"R_iho "<<R_iho.Height()<<" x "<<R_iho.Width()<<std::endl;
+        //R_iho.Print();
+        for(int j=0; j<R_iho.Width(); ++j) {
+          for(int i=0; i<R_iho.Height(); ++i) {
+            std::cout<<R_iho(i, j)<<" ";
+          }
+          std::cout<<""<<std::endl;
+        }
+
       }
-      
+
       if (build_P && true)
       {
          DenseMatrix P_iho(&P[offsets[iho]], ndof_ho, ndof_lor*nref);
@@ -496,16 +506,17 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
    for(int i=0; i<R.Size(); ++i) {
      R_error += fabs(R[i] - R_ea[i]);
 
-     if(i < 4) {
-       std::cout<<"diff = "<<fabs(R[i] - R_ea[i])<<" : "<<R[i]<<" "<<R_ea[i]<<std::endl;
+     if(i > 35 && i < 50 && false) {
+       std::cout<<"i = "<<i<<" diff = "<<fabs(R[i] - R_ea[i])<<" : "<<R[i]<<" "<<R_ea[i]<<std::endl;
      }
-     
+
    }
 
    for(int j=0; j<P.Size(); ++j) {
      P_error += fabs(P[j] - P_ea[j]);
    }
 
+   std::cout<<"R.Size() = "<<R.Size()<<" R_ea.Size() = "<<R_ea.Size()<<std::endl;
    std::cout<<"Error in R "<<R_error<<" error in P "<<P_error<<std::endl;
 }
 
@@ -553,6 +564,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    // R_ea will contain the restriction (L^2 projection operator) defined on each
    // coarse HO element (and corresponding patch of LOR elements)
    R_ea.SetSize(offsets[nel_ho]);
+   std::cout<<"R_ea.Size() = "<<R_ea.Size()<<std::endl;
    if (build_P)
    {
       // P will contain the corresponding prolongation operator
@@ -592,8 +604,10 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
        D.SetSize(qPts, nref, nel_ho);
 
        const DofToQuad *maps_lor = &fe_lor.GetDofToQuad(*ir, DofToQuad::TENSOR);
+
        const GeometricFactors *geo_facts =
          mesh_lor->GetGeometricFactors(*ir, GeometricFactors::DETERMINANTS);
+
        const int Q1D         = maps_lor->nqpt;
 
        const auto W = Reshape(ir->GetWeights().Read(), Q1D, Q1D);
@@ -677,6 +691,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
    } //Competed setup of basis function and quadrature point
 
+#if 1
    //Assemble mixed mass matrix
    Vector M_mixed_all;
    Vector M_ea_lor;
@@ -699,25 +714,30 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
      const int qPts = D.SizeI();
 
-     M_mixed_all.SetSize(ndof_lor*nref*ndof_ho*nel_ho);
+     M_mixed_all.SetSize(ndof_lor*ndof_ho*nref*nel_ho);
 
      //Rows x columns
      //Recall MFEM is column major
 
-     //rows x colums is inverted
+     //rows x columns is inverted  - matrix is ndof_lor x ndof_ho
      auto v_M_mixed_all = mfem::Reshape(M_mixed_all.Write(), ndof_lor, ndof_ho, nref, nel_ho);
 
      for(int iho=0; iho<nel_ho; ++iho){
+
+       //std::cout<<"iho = "<<iho<<std::endl;
        for (int iref = 0; iref < nref; ++iref) {
 
          //DenseMatrix T_Mat(qPts, ndof_ho);
 
          // Q x B_ho_dofs  D*B_ho
+#if 0
+         //note we are overwriting the dense tensor -- causing issues
          for(int q=0; q<qPts; ++q) {
            for(int bh=0; bh<fe_ho.GetDof(); ++bh) {
              B_H(q, bh, iref) = D(q, iref, iho) *  B_H(q, bh, iref);
            }
          }
+#endif
 
          // (B_lo_dofs x Q) x (Q x B_ho_dofs)
            for(int bh=0; bh<fe_ho.GetDof(); ++bh) {
@@ -725,19 +745,23 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
                double dot = 0.0;
                for (int qi=0; qi<qPts; ++qi) {
-                 dot += B_L(qi, bl, iref) * B_H(qi, bh, iref);
+                 //std::cout<<"qi, bh, iref "<<qi<<" "<<bh<<" "<<iref<<std::endl;
+                 //std::cout<<"B_L(qi, bl, iref)  = "<<B_L(qi, bl, iref) <<" B_H(qi, bh, iref) = "<<B_H(qi, bh, iref)<<std::endl;
+                 dot += B_L(qi, bl, iref) *  D(qi, iref, iho) * B_H(qi, bh, iref);
                }
 
+               //column major storange
                v_M_mixed_all(bl, bh, iref, iho) = dot;
+               //std::cout<<"v_M_mixed_all(bl, bh, iref, iho) "<< v_M_mixed_all(bl, bh, iref, iho)<<std::endl;
              }
            }
-           
-           if(iho ==0 && false) {
-             std::cout<<"My code"<<std::endl;
+
+           if(iho < 3 && false) {
+             std::cout<<"v_mixed_all"<<std::endl;
              for(int bh=0; bh<fe_ho.GetDof(); ++bh) {
                for(int bl=0; bl<fe_lor.GetDof(); ++bl) {
                  std::cout<<v_M_mixed_all(bl, bh, iref, iho)<<" ";
-               }               
+               }
              }
              std::cout<<"\n";
            }
@@ -764,14 +788,21 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    BatchLUFactor(ndof_lor, nel_lor, MLU_ea_lor, P);
    BatchInverseMatrix(MLU_ea_lor, ndof_lor, nel_lor, P, Minv_ear_lor);
 
+   //Recall mfem is column major
+   // ndof_lor x ndof_ho
    auto v_M_mixed_all = mfem::Reshape(M_mixed_all.Read(), ndof_lor, ndof_ho, nref, nel_ho);
+
+   //matrix is symmetric
    auto v_Minv_ear_lor = mfem::Reshape(Minv_ear_lor.Read(), ndof_lor, ndof_lor, nel_lor);
-   auto v_R_ea = mfem::Reshape(R_ea.Write(), ndof_lor, ndof_ho, nel_lor);
+
+   //ndof_lor x ndof_ho
+   auto v_R_ea = mfem::Reshape(R_ea.Write(), ndof_lor, nref, ndof_ho, nel_ho);
 
    std::cout<<"R_ea.Size() = "<<R_ea.Size()<<std::endl;
    std::cout<<"ndof_lor = "<<ndof_lor<<std::endl;
    std::cout<<"ndof_ho = "<<ndof_ho<<std::endl;
    std::cout<<"nel_lor = "<<nel_lor<<" "<<"nel_ho*nref = "<<nel_ho*nref<<std::endl;
+   std::cout<<"nref = "<<nref<<std::endl;
 
    MFEM_VERIFY(nel_lor==nel_ho*nref, "nel_lor != nel_ho*nref");
 
@@ -779,67 +810,51 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    // (ndofs_lor x ndofs_lor) x (ndofs_lor x ndof_ho)
    for(int iho = 0; iho<nel_ho; ++iho) {
 
-     for(int iref = 0; iref < nref; ++iref) {
+       for(int j=0; j<ndof_ho; ++j) {
 
-       const int lor_idx = iref + iho * nref;
+         for(int iref = 0; iref < nref; ++iref) {
 
-       for(int i=0; i<ndof_lor; ++i) {
-         for(int j=0; j<ndof_ho; ++j) {
+           const int lor_idx = iref + iho * nref;
 
-           double dot = 0.0;
-           for(int k=0; k<ndof_lor; ++k) {
-             dot += v_Minv_ear_lor(i, k, lor_idx) * v_M_mixed_all(k, j, iref, iho);
+           if(iho == 1 && j == 0 && false)
+           {
+             std::cout<<"Minv_ear_lo, ndof_lor = "<<ndof_lor<<std::endl;
+             for(int t=0; t<ndof_lor; ++t) {
+               for(int s=0; s<ndof_lor; ++s) {
+                 std::cout<<v_Minv_ear_lor(t, s, lor_idx)<<" ";
+               }
+               std::cout<<""<<std::endl;
+             }
            }
-           v_R_ea(i, j, lor_idx) = dot;
-         }
-       }
 
-       if(iho == 0) {
-         std::cout<<"my code"<<std::endl;
-         for(int i=0; i<ndof_lor; ++i) {
-           for(int j=0; j<ndof_lor; ++j) {
-             std::cout<<v_Minv_ear_lor(i, j, lor_idx)<<" ";
-           }
-           std::cout<<""<<std::endl;
-         }         
-       }
-
-       if(iho == 0 && false) {
-         std::cout<<"my code"<<std::endl;
-         for(int i=0; i<ndof_lor; ++i) {
-           for(int j=0; j<ndof_lor; ++j) {           
-             std::cout<<v_Minv_ear_lor(i, j, lor_idx)<<" ";             
-           }
-           std::cout<<""<<std::endl;
-         }
-
-       }
-
-       
-         if(iref == 0 && iho == 0 && false) {
 
            for(int i=0; i<ndof_lor; ++i) {
-             for(int j=0; j<ndof_ho; ++j) {
-               std::cout<<v_M_mixed_all(i, j, iref, iho)<<" ";
-             }
-             std::cout<<""<<std::endl;
-           }
-         }
 
+             //matrices are stored in the transpose position
+             double dot = 0.0;
+             for(int k=0; k<ndof_lor; ++k) {
+               dot += v_Minv_ear_lor(i, k, lor_idx) * v_M_mixed_all(k, j, iref, iho);
+             }
+             v_R_ea(i, iref, j, iho) = dot;
+             if(iho == 1) {
+               //std::cout<<v_R_ea(i, iref, j, iho)<<" ";
+             }
+           }
+           //if(iho == 1) std::cout<<""<<std::endl;
+         }
 
      }
    }
-
-
-
-
-
+#endif
 }
 
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
    const Vector &x, Vector &y) const
 {
+
+  std::cout<<"Calling L2ProjectionL2Space::Mult "<<std::endl;
+
    int vdim = fes_ho.GetVDim();
    Array<int> vdofs;
    DenseMatrix xel_mat, yel_mat;
