@@ -482,18 +482,27 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
 
       }
 
-      if (build_P && true)
+      if (build_P)
       {
+        //std::cout<<"assembling P"<<std::endl;
          DenseMatrix P_iho(&P[offsets[iho]], ndof_ho, ndof_lor*nref);
 
          mfem::MultAtB(R_iho, M_lor, RtMlor);
          mfem::Mult(RtMlor, R_iho, RtMlorR);
+
+         if(iho == 0) {
+           std::cout<<"Reference"<<std::endl;
+           //R_iho.Print();
+           //M_lor.Print();
+           //RtMlor.Print();
+           RtMlorR.Print();
+         }
+
+
          RtMlorR_inv.Factor();
          RtMlorR_inv.Mult(RtMlor, P_iho);
       }
    }
-
-
 
 
    //Assemble on the device now...
@@ -506,14 +515,19 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
    for(int i=0; i<R.Size(); ++i) {
      R_error += fabs(R[i] - R_ea[i]);
 
-     if(i > 35 && i < 50 && false) {
+     if(i < 10 && false) {
        std::cout<<"i = "<<i<<" diff = "<<fabs(R[i] - R_ea[i])<<" : "<<R[i]<<" "<<R_ea[i]<<std::endl;
      }
 
    }
 
-   for(int j=0; j<P.Size(); ++j) {
+    for(int j=0; j<P.Size(); ++j) {
      P_error += fabs(P[j] - P_ea[j]);
+     if(j < 10 && false) {
+       std::cout<<"j = "<<j<<" diff = "<<fabs(P[j] - P_ea[j])<<" : "<<P[j]<<" "<<P_ea[j]<<std::endl;
+     }
+
+
    }
 
    std::cout<<"R.Size() = "<<R.Size()<<" R_ea.Size() = "<<R_ea.Size()<<std::endl;
@@ -846,14 +860,156 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
      }
    }
 #endif
+
+
+
+   if(build_P) {
+     std::cout<<"Need to assemble P"<<std::endl;
+
+     //P = inv(R^T M_L R) * R^T M_L
+
+     //M_lor is size of ndof_lor x ndof_lor
+     //R is size of (ndof_lor x nref x ndof_ho)
+     auto v_M_ea_lor = mfem::Reshape(M_ea_lor.Read(), ndof_lor, ndof_lor, nel_lor);
+     auto v_R_ea = mfem::Reshape(R_ea.Read(), ndof_lor, nref, ndof_ho, nel_ho);
+     //R^T M_LO is of size nref x ndof_lor
+
+     //Compute R^T M_L
+     mfem::Vector RtM_L(ndof_ho*nref*ndof_lor*nel_ho);
+     auto v_RtM_L = mfem::Reshape(RtM_L.Write(), ndof_ho, ndof_lor, nref, nel_ho);
+
+     for(int e=0; e<nel_ho; ++e) {
+
+       for(int iho=0; iho<ndof_ho; ++iho) {
+         for(int iref=0; iref<nref; ++iref) {
+           for(int jlo=0; jlo<ndof_lor; ++jlo) {
+
+             const int lor_idx = iref + e * nref;
+
+             double dot = 0.0;
+             for(int t=0; t<ndof_lor; ++t) {
+               dot += v_R_ea(t, iref, iho, e) * v_M_ea_lor(t, jlo, lor_idx);
+             }
+             const int lo_ref_idx = jlo + ndof_lor * iref;
+
+             v_RtM_L(iho, jlo, iref, e) = dot;
+
+           }
+         }
+       }
+
+       if(e==0)  {
+         //std::cout<<"My impl"<<std::endl;
+         /*
+         for(int iho=0; iho < ndof_ho; ++iho) {
+             for(int jlo = 0; jlo < nref*ndof_lor; ++jlo) {
+               std::cout<<v_R_ea(jlo, iho, e)<<" ";
+             }
+             std::cout<<""<<std::endl;
+         }
+         */
+         /*
+         for(int ilo=0; ilo<nref*ndof_lor; ++ilo) {
+           for(int jlo=0; jlo<nref*ndof_lor; ++jlo) {
+             std::cout<<v_M_ea_lor(jlo, ilo, e)<<" ";
+           }
+           std::cout<<""<<std::endl;
+         }
+         */
+
+         /*
+         for(int iho=0; iho<ndof_ho; ++iho) {
+           for(int iref=0; iref<nref; ++iref) {
+             for(int jlo=0; jlo<ndof_lor; ++jlo) {
+               std::cout<<v_RtM_L(iho, jlo, iref, e)<<" "<<std::endl;
+             }
+           }
+           std::cout<<" "<<std::endl;
+         }
+         */
+
+       }
+
+     }
+
+     //resulting matrix should be: ndof_ho x ndof_ho
+     //R^T M_L x R
+     mfem::Vector RtM_LR(ndof_ho * ndof_ho * nel_ho);
+
+     auto v_RtM_LR = mfem::Reshape(RtM_LR.Write(), ndof_ho, ndof_ho, nel_ho);
+
+     for(int e=0; e<nel_ho; ++e) {
+
+       for(int iho=0; iho<ndof_ho; ++iho) {
+         for(int jho=0; jho<ndof_ho; ++jho) {
+
+           double dot = 0.0;
+           for(int iref=0; iref<nref; ++iref) {
+             for(int ilo=0; ilo<ndof_lor; ++ilo) {
+               dot += v_RtM_L(iho, ilo, iref, e) *  v_R_ea(ilo, iref, jho, e);
+             }
+           }
+           v_RtM_LR(iho, jho, e) = dot;
+           //
+         }
+       }
+
+       //Print
+       if( e == 0) {
+       for(int iho=0; iho<ndof_ho; ++iho) {
+         for(int jho=0; jho<ndof_ho; ++jho) {
+           std::cout<<v_RtM_LR(iho, jho, e)<<" ";
+         }
+         std::cout<<""<<std::endl;
+       }
+       }
+
+     }
+
+
+     Vector RtM_LR_LU(RtM_LR); P = 0;
+     Vector InvRtM_LR_LU(RtM_LR.Size());
+
+     BatchLUFactor(ndof_ho, nel_ho, RtM_LR_LU, P);
+     BatchInverseMatrix(RtM_LR_LU, ndof_ho, nel_ho, P, InvRtM_LR_LU);
+
+#if 1 //--- need to fix here...
+     //Form P_ea
+     //P_ea should be of dimension (ndof_ho x ndof_ho) x (ndof_ho x nref*ndof_lor)
+     //P_ea ndof_ho x nref*ndof_lor
+     auto v_InvRtM_LR_LU = mfem::Reshape(InvRtM_LR_LU.Read(), ndof_ho, ndof_ho, nel_ho);
+     auto v_P_ea = mfem::Reshape(P_ea.Write(), ndof_ho, ndof_lor, nref, nel_ho);
+
+     for(int e=0; e<nel_ho; ++e) {
+
+       for(int iho=0; iho<ndof_ho; ++iho) {
+         for(int iref=0; iref<nref; ++iref) {
+           for(int ilo=0; ilo<ndof_lor; ++ilo) {
+
+             double dot = 0.0;
+             for(int t=0; t<ndof_ho; ++t) {
+               dot += v_InvRtM_LR_LU(iho, t, e) * v_RtM_L(t, ilo, iref, e);
+             }
+             v_P_ea(iho, ilo, iref, e) = dot;
+
+           }
+         }
+
+       }
+
+     }
+#endif
+
+   }
+
+
 }
 
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
    const Vector &x, Vector &y) const
 {
-
-  std::cout<<"Calling L2ProjectionL2Space::Mult "<<std::endl;
+   std::cout<<"Calling L2ProjectionL2Space::Mult "<<std::endl;
 
    int vdim = fes_ho.GetVDim();
    Array<int> vdofs;
@@ -869,7 +1025,15 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
 
       fes_ho.GetElementVDofs(iho, vdofs);
       x.GetSubVector(vdofs, xel_mat.GetData());
+      //if(iho == 0) {
+      //std::cout<<"ndof_ho = "<<ndof_ho<<" vdim = "<<vdim<<std::endl;
+      //std::cout<<"R_iho.Sizes() = "<<R_iho.Height()<<" "<<R_iho.Width()<<std::endl;
+      //}
+
       mfem::Mult(R_iho, xel_mat, yel_mat);
+      if(iho ==0) {
+        //yel_mat.Print();
+      }
       // Place result correctly into the low-order vector
       for (int iref = 0; iref < nref; ++iref)
       {
@@ -882,6 +1046,47 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
          }
       }
    }
+
+   std::cout<<"Checking device output"<<std::endl;
+   Vector y_temp(y.Size());
+
+   DeviceMult(x, y_temp);
+
+   y_temp -= y;
+
+   double error = y_temp.Norml2();
+   std::cout<<"mat-vec error "<<error<<std::endl;
+
+}
+
+void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
+   const Vector &x, Vector &y) const
+{
+  const int vdim = fes_ho.GetVDim();
+  const int iho = 0;
+  const int nref = ho2lor.RowSize(iho);
+  const int ndof_ho = fes_ho.GetFE(iho)->GetDof();
+  const int ndof_lor = fes_lor.GetFE(ho2lor.GetRow(iho)[0])->GetDof();
+  const Mesh *mesh_ho = fes_ho.GetMesh();
+  const int nel_ho = mesh_ho->GetNE();
+
+  auto v_R_ea = mfem::Reshape(R_ea.Read(), ndof_lor, nref, ndof_ho, nel_ho);
+  auto v_x    = mfem::Reshape(x.Read(), ndof_ho, nel_ho);
+  auto v_y    = mfem::Reshape(y.Write(), ndof_lor, nref, nel_ho);
+
+  for(int iho = 0; iho < nel_ho; ++iho) {
+    for(int i=0; i<nref; ++i) {
+      for(int j=0; j<ndof_lor; ++j) {
+
+        double dot = 0.0;
+        for(int k=0; k<ndof_ho; ++k) {
+          dot += v_R_ea(j, i, k, iho) * v_x(k, iho);
+        }
+        v_y(j, i, iho) = dot;
+      }
+    }
+  }
+
 }
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::MultTranspose(

@@ -237,8 +237,8 @@ protected:
 
      /*Same as above but assembles and stores R_ea, P_ea */
      void DeviceL2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
-                                    const FiniteElementSpace& fes_lor_);     
-     
+                                    const FiniteElementSpace& fes_lor_);
+
       /// Maps <tt>x</tt>, primal field coefficients defined on a coarse mesh
       /// with a higher order L2 finite element space, to <tt>y</tt>, primal
       /// field coefficients defined on a refined mesh with a low order L2
@@ -246,6 +246,10 @@ protected:
       /// the coarse mesh. Coefficients are computed through minimization of L2
       /// error between the fields.
       virtual void Mult(const Vector& x, Vector& y) const;
+
+      //Perform mult on the device (same as above)
+      void DeviceMult(const Vector& x, Vector& y) const;
+
       /// Maps <tt>x</tt>, dual field coefficients defined on a refined mesh
       /// with a low order L2 finite element space, to <tt>y</tt>, dual field
       /// coefficients defined on a coarse mesh with a higher order L2 finite
