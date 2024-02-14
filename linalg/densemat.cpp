@@ -2224,7 +2224,7 @@ void DenseMatrix::Print(std::ostream &os, int width_) const
    ios::fmtflags old_flags = os.flags();
    // output flags = scientific + show sign
    os << setiosflags(ios::scientific | ios::showpos);
-   //os << setiosflags(ios::scientific | ios::showpos);   
+   //os << setiosflags(ios::scientific | ios::showpos);
    for (int i = 0; i < height; i++)
    {
       os << "[row " << i << "]\n";
@@ -4390,7 +4390,7 @@ void BatchLUSolve(const DenseTensor &Mlu, const Array<int> &P, Vector &X)
    {
       kernels::LUSolve(&data_all(0, 0,e), m, &piv_all(0, e), &x_all(0,e));
    });
-   
+
 }
 
 void BatchLUFactor(const int m, const int len,
@@ -4400,7 +4400,8 @@ void BatchLUFactor(const int m, const int len,
    auto data_all       = mfem::Reshape(A.ReadWrite(), m, m, len);
    auto piv_all        = mfem::Reshape(P.Write(), m, len);
 
-   mfem::forall(len, [=] MFEM_HOST_DEVICE (int e) {
+   mfem::forall(len, [=] MFEM_HOST_DEVICE (int e)
+   {
 
       int *ipiv = &piv_all(0, e);
       for (int i = 0; i < m; i++)
@@ -4450,15 +4451,17 @@ void BatchLUFactor(const int m, const int len,
 }
 
 
-void BatchLUSolve(mfem::Vector &Minv, int m, int NE, mfem::Array<int> &P, mfem::Vector &X)
+void BatchLUSolve(mfem::Vector &Minv, int m, int NE, mfem::Array<int> &P,
+                  mfem::Vector &X)
 {
    auto data_all = mfem::Reshape(Minv.Read(), m, m, NE);
    auto piv_all  = mfem::Reshape(P.Read(), m, NE);
    auto x_all    = mfem::Reshape(X.ReadWrite(), m, NE);
 
 
-   mfem::forall(NE, [=] MFEM_HOST_DEVICE (int e) {
-                      
+   mfem::forall(NE, [=] MFEM_HOST_DEVICE (int e)
+   {
+
       const int *ipiv = &piv_all(0, e);
       double *x       = &x_all(0, e);
 
@@ -4500,9 +4503,9 @@ void BatchInverseMatrix(const mfem::Vector &LU,
    auto piv_all  = mfem::Reshape(P.Read(), m, NE);
    auto inv_all  = mfem::Reshape(INV.ReadWrite(), m, m, NE);
 
-   
+
    mfem::forall(NE, [=] MFEM_HOST_DEVICE (int e)
-   { 
+   {
       // A^{-1} = U^{-1} L^{-1} P
       // X <- U^{-1} (set only the upper triangular part of X)
       double *X          = &inv_all(0, 0, e);

@@ -211,10 +211,10 @@ protected:
                          IntegrationPointTransformation& ip_tr,
                          DenseMatrix& M_mixed_el) const;
 
-     void ElemMixedMass(Geometry::Type geom, const FiniteElement& fe_ho,
-                        const FiniteElement& fe_lor, ElementTransformation* el_tr,
-                        IntegrationPointTransformation& ip_tr,
-                        DenseMatrix& B_L, DenseMatrix& B_H) const;
+      void ElemMixedMass(Geometry::Type geom, const FiniteElement& fe_ho,
+                         const FiniteElement& fe_lor, ElementTransformation* el_tr,
+                         IntegrationPointTransformation& ip_tr,
+                         DenseMatrix& B_L, DenseMatrix& B_H) const;
    };
 
    /** Class for projection operator between a L2 high-order finite element
@@ -235,9 +235,9 @@ protected:
       L2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
                           const FiniteElementSpace& fes_lor_);
 
-     /*Same as above but assembles and stores R_ea, P_ea */
-     void DeviceL2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
-                                    const FiniteElementSpace& fes_lor_);
+      /*Same as above but assembles and stores R_ea, P_ea */
+      void DeviceL2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
+                                     const FiniteElementSpace& fes_lor_);
 
       /// Maps <tt>x</tt>, primal field coefficients defined on a coarse mesh
       /// with a higher order L2 finite element space, to <tt>y</tt>, primal
@@ -258,6 +258,9 @@ protected:
       /// error between the primal fields. Note, if the <tt>x</tt>-coefficients
       /// come from ProlongateTranspose, then mass is conserved.
       virtual void MultTranspose(const Vector& x, Vector& y) const;
+
+      void DeviceMultTranspose(const Vector& x, Vector& y) const;
+
       /// Maps <tt>x</tt>, primal field coefficients defined on a refined mesh
       /// with a low order L2 finite element space, to <tt>y</tt>, primal field
       /// coefficients defined on a coarse mesh with a higher order L2 finite
@@ -266,6 +269,9 @@ protected:
       /// left-inverse prolongation operation. This functionality is also
       /// provided as an Operator by L2Prolongation.
       virtual void Prolongate(const Vector& x, Vector& y) const;
+
+      void DeviceProlongate(const Vector& x, Vector& y) const;
+
       /// Maps <tt>x</tt>, dual field coefficients defined on a coarse mesh with
       /// a higher order L2 finite element space, to <tt>y</tt>, dual field
       /// coefficients defined on a refined mesh with a low order L2 finite
@@ -274,6 +280,10 @@ protected:
       /// conservative left-inverse prolongation operation. This functionality
       /// is also provided as an Operator by L2Prolongation.
       virtual void ProlongateTranspose(const Vector& x, Vector& y) const;
+
+      void DeviceProlongateTranspose(const Vector& x, Vector& y) const;
+
+
       virtual void SetRelTol(double p_rtol_) { } ///< No-op.
       virtual void SetAbsTol(double p_atol_) { } ///< No-op.
    };
