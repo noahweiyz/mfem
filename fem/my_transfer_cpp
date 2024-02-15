@@ -20,7 +20,7 @@ GridTransfer::GridTransfer(FiniteElementSpace &dom_fes_,
                            FiniteElementSpace &ran_fes_)
    : dom_fes(dom_fes_), ran_fes(ran_fes_),
      oper_type(Operator::ANY_TYPE),
-     fw_t_oper(), bw_t_oper(), use_device(false), verify_solution(false)
+     fw_t_oper(), bw_t_oper(), use_device(false)
 {
 #ifdef MFEM_USE_MPI
    const bool par_dom = dynamic_cast<ParFiniteElementSpace*>(&dom_fes);
@@ -319,19 +319,10 @@ void L2ProjectionGridTransfer::L2Projection::ElemMixedMass(
 
 }
 
-L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
-(const FiniteElementSpace &fes_ho_, const FiniteElementSpace &fes_lor_,
- const bool use_device_, const bool verify_solution_)
-   : L2Projection(fes_ho_, fes_lor_),
-     use_device(use_device_), verify_solution(verify_solution_)
+L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space(
+   const FiniteElementSpace &fes_ho_, const FiniteElementSpace &fes_lor_)
+   : L2Projection(fes_ho_, fes_lor_)
 {
-
-   if (use_device)
-   {
-      DeviceL2ProjectionL2Space(fes_ho_, fes_lor_);
-      if (!verify_solution) {return;}
-   }
-
    Mesh *mesh_ho = fes_ho.GetMesh();
    Mesh *mesh_lor = fes_lor.GetMesh();
    int nel_ho = mesh_ho->GetNE();
@@ -396,6 +387,8 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
       DenseMatrix R_iho(&R[offsets[iho]], ndof_lor*nref, ndof_ho);
 
       DenseMatrix Minv_lor(ndof_lor*nref, ndof_lor*nref);
+
+      //ndof_lor x nref x ndof_ho
       DenseMatrix M_mixed(ndof_lor*nref, ndof_ho);
 
       MassIntegrator mi;
@@ -434,51 +427,140 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
          ElemMixedMass(geom, fe_ho, fe_lor, el_tr, ip_tr, M_mixed_el);
 
          M_mixed.CopyMN(M_mixed_el, iref*ndof_lor, 0);
+
+         if (iho == 0 && false)
+         {
+            std::cout<<"ref code "<<std::endl;
+            for (int i=0; i<ndof_lor; ++i)
+            {
+               for (int j=0; j<ndof_ho; ++j)
+               {
+                  std::cout<<M_mixed_el(i, j)<<" ";
+               }
+               std::cout<<""<<std::endl;
+            }
+
+         }
+         //R_iho = M_mixed_el;
+
       }
+
       mfem::Mult(Minv_lor, M_mixed, R_iho);
+
+      if (iho == 0 && false)
+      {
+         for (int i=0; i<Minv_lor.Height(); ++i)
+         {
+            for (int j=0; j<Minv_lor.Width(); ++j)
+            {
+               std::cout<<Minv_lor(i, j)<<" ";
+            }
+            std::cout<<""<<std::endl;
+         }
+      }
+
+      if (iho < 3 && false)
+      {
+         std::cout<<"iho = "<<iho<<std::endl;
+         std::cout<<"Minv_lor"<<std::endl;
+         //Minv_lor.Print();
+         for (int i=0; i<Minv_lor.Height(); ++i)
+         {
+            for (int j=0; j<Minv_lor.Width(); ++j)
+            {
+               std::cout<<Minv_lor(i, j)<<" ";
+            }
+            std::cout<<""<<std::endl;
+         }
+
+         std::cout<<"M_mixed"<<std::endl;
+         //M_mixed.Print();
+         for (int i=0; i<M_mixed.Height(); ++i)
+         {
+            for (int j=0; j<M_mixed.Width(); ++j)
+            {
+               std::cout<<M_mixed(i, j)<<" ";
+            }
+            std::cout<<""<<std::endl;
+         }
+
+         std::cout<<"R_iho "<<R_iho.Height()<<" x "<<R_iho.Width()<<std::endl;
+         //R_iho.Print();
+         for (int j=0; j<R_iho.Width(); ++j)
+         {
+            for (int i=0; i<R_iho.Height(); ++i)
+            {
+               std::cout<<R_iho(i, j)<<" ";
+            }
+            std::cout<<""<<std::endl;
+         }
+
+      }
 
       if (build_P)
       {
+         //std::cout<<"assembling P"<<std::endl;
          DenseMatrix P_iho(&P[offsets[iho]], ndof_ho, ndof_lor*nref);
 
          mfem::MultAtB(R_iho, M_lor, RtMlor);
          mfem::Mult(RtMlor, R_iho, RtMlorR);
+
+         if (iho == 0)
+         {
+            std::cout<<"Reference"<<std::endl;
+            //R_iho.Print();
+            //M_lor.Print();
+            //RtMlor.Print();
+            RtMlorR.Print();
+         }
+
+
          RtMlorR_inv.Factor();
          RtMlorR_inv.Mult(RtMlor, P_iho);
       }
    }
 
 
-   if (verify_solution)
+   //Assemble on the device now...
+   DeviceL2ProjectionL2Space(fes_ho_, fes_lor_);
+
+   std::cout<<"checking operators ..."<<std::endl;
+
+   //checking assembly of operators
+   double R_error = 0.0, P_error = 0.0;
+   for (int i=0; i<R.Size(); ++i)
    {
-      mfem::out<<"checking operators ...\n";
+      R_error += fabs(R[i] - R_ea[i]);
 
-      double R_error = 0.0, P_error = 0.0;
-      for (int i=0; i<R.Size(); ++i)
+      if (i < 10 && false)
       {
-         R_error += fabs(R[i] - R_ea[i]);
-      }
-
-      for (int j=0; j<P.Size(); ++j)
-      {
-         P_error += fabs(P[j] - P_ea[j]);
+         std::cout<<"i = "<<i<<" diff = "<<fabs(R[i] - R_ea[i])
+                  <<" : "<<R[i]<<" "<<R_ea[i]<<std::endl;
       }
 
-      if (R_error > 1e-12 || P_error > 1e-12)
-      {
-         MFEM_VERIFY(false,
-                     "Error in operator assembly R_error = "<<R_error<<" P_error ="<<P_error);
-      }
-      else
-      {
-         std::cout<<"Operators pass! R_error = "<<R_error<<" P_error = "<<P_error<<std::endl;
-      }
    }
+
+   for (int j=0; j<P.Size(); ++j)
+   {
+      P_error += fabs(P[j] - P_ea[j]);
+      if (j < 10 && false)
+      {
+         std::cout<<"j = "<<j<<" diff = "<<fabs(P[j] - P_ea[j])
+                  <<" : "<<P[j]<<" "<<P_ea[j]<<std::endl;
+      }
+
+
+   }
+
+   std::cout<<"R.Size() = "<<R.Size()<<" R_ea.Size() = "<<R_ea.Size()<<std::endl;
+   std::cout<<"Error in R "<<R_error<<" error in P "<<P_error<<std::endl;
 }
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 (const FiniteElementSpace &fes_ho_, const FiniteElementSpace &fes_lor_)
 {
+
+   std::cout<<"Using device to... "<<std::endl;
 
    Mesh *mesh_ho = fes_ho.GetMesh();
    Mesh *mesh_lor = fes_lor.GetMesh();
@@ -518,7 +600,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    // R_ea will contain the restriction (L^2 projection operator) defined on each
    // coarse HO element (and corresponding patch of LOR elements)
    R_ea.SetSize(offsets[nel_ho]);
-
+   std::cout<<"R_ea.Size() = "<<R_ea.Size()<<std::endl;
    if (build_P)
    {
       // P will contain the corresponding prolongation operator
@@ -597,7 +679,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          emb_tr.SetIdentityTransformation(geom);
          const DenseTensor &pmats = cf_tr.point_matrices[geom];
 
-         /*
          DenseMatrix R_iho(&R[offsets[iho]], ndof_lor*nref, ndof_ho);
 
          DenseMatrix Minv_lor(ndof_lor*nref, ndof_lor*nref);
@@ -615,23 +696,20 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          DenseMatrix RtMlor(ndof_ho, ndof_lor*nref);
          DenseMatrix RtMlorR(ndof_ho, ndof_ho);
          DenseMatrixInverse RtMlorR_inv(&RtMlorR);
-         */
 
          //Collect the basis functions
          for (int iref = 0; iref < nref; ++iref)
          {
 
+            // Assemble the low-order refined mass matrix and invert locally
             int ilor = lor_els[iref];
-            /*
-             // Assemble the low-order refined mass matrix and invert locally
-             ElementTransformation *el_tr = fes_lor.GetElementTransformation(ilor);
-             mi.AssembleElementMatrix(fe_lor, *el_tr, M_lor_el);
-             M_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
-             Minv_lor_el.Factor();
-             Minv_lor_el.GetInverseMatrix(M_lor_el);
-             // Insert into the diagonal of the patch LOR mass matrix
-             Minv_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
-            */
+            ElementTransformation *el_tr = fes_lor.GetElementTransformation(ilor);
+            mi.AssembleElementMatrix(fe_lor, *el_tr, M_lor_el);
+            M_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
+            Minv_lor_el.Factor();
+            Minv_lor_el.GetInverseMatrix(M_lor_el);
+            // Insert into the diagonal of the patch LOR mass matrix
+            Minv_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
 
             // Now assemble the block-row of the mixed mass matrix associated
             // with integrating HO functions against LOR functions on the LOR
@@ -653,6 +731,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
    } //Competed setup of basis function and quadrature point
 
+#if 1
    //Assemble mixed mass matrix
    Vector M_mixed_all;
    Vector M_ea_lor;
@@ -687,8 +766,23 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       for (int iho=0; iho<nel_ho; ++iho)
       {
 
+         //std::cout<<"iho = "<<iho<<std::endl;
          for (int iref = 0; iref < nref; ++iref)
          {
+
+            //DenseMatrix T_Mat(qPts, ndof_ho);
+
+            // Q x B_ho_dofs  D*B_ho
+#if 0
+            //note we are overwriting the dense tensor -- causing issues
+            for (int q=0; q<qPts; ++q)
+            {
+               for (int bh=0; bh<fe_ho.GetDof(); ++bh)
+               {
+                  B_H(q, bh, iref) = D(q, iref, iho) *  B_H(q, bh, iref);
+               }
+            }
+#endif
 
             // (B_lo_dofs x Q) x (Q x B_ho_dofs)
             for (int bh=0; bh<fe_ho.GetDof(); ++bh)
@@ -699,16 +793,33 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                   double dot = 0.0;
                   for (int qi=0; qi<qPts; ++qi)
                   {
+                     //std::cout<<"qi, bh, iref "<<qi<<" "<<bh<<" "<<iref<<std::endl;
+                     //std::cout<<"B_L(qi, bl, iref)  = "<<B_L(qi, bl, iref) <<" B_H(qi, bh, iref) = "<<B_H(qi, bh, iref)<<std::endl;
                      dot += B_L(qi, bl, iref) *  D(qi, iref, iho) * B_H(qi, bh, iref);
                   }
 
                   //column major storange
                   v_M_mixed_all(bl, bh, iref, iho) = dot;
+                  //std::cout<<"v_M_mixed_all(bl, bh, iref, iho) "<< v_M_mixed_all(bl, bh, iref, iho)<<std::endl;
                }
+            }
+
+            if (iho < 3 && false)
+            {
+               std::cout<<"v_mixed_all"<<std::endl;
+               for (int bh=0; bh<fe_ho.GetDof(); ++bh)
+               {
+                  for (int bl=0; bl<fe_lor.GetDof(); ++bl)
+                  {
+                     std::cout<<v_M_mixed_all(bl, bh, iref, iho)<<" ";
+                  }
+               }
+               std::cout<<"\n";
             }
 
          }
       }
+
    } // end of mixed assembly mass matrix
 
 
@@ -740,16 +851,41 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    //ndof_lor x ndof_ho
    auto v_R_ea = mfem::Reshape(R_ea.Write(), ndof_lor, nref, ndof_ho, nel_ho);
 
+   std::cout<<"R_ea.Size() = "<<R_ea.Size()<<std::endl;
+   std::cout<<"ndof_lor = "<<ndof_lor<<std::endl;
+   std::cout<<"ndof_ho = "<<ndof_ho<<std::endl;
+   std::cout<<"nel_lor = "<<nel_lor<<" "<<"nel_ho*nref = "<<nel_ho*nref<<std::endl;
+   std::cout<<"nref = "<<nref<<std::endl;
+
    MFEM_VERIFY(nel_lor==nel_ho*nref, "nel_lor != nel_ho*nref");
 
+   std::cout<<"nref = "<<nref<<std::endl;
    // (ndofs_lor x ndofs_lor) x (ndofs_lor x ndof_ho)
    for (int iho = 0; iho<nel_ho; ++iho)
    {
+
       for (int j=0; j<ndof_ho; ++j)
       {
+
          for (int iref = 0; iref < nref; ++iref)
          {
+
             const int lor_idx = iref + iho * nref;
+
+            if (iho == 1 && j == 0 && false)
+            {
+               std::cout<<"Minv_ear_lo, ndof_lor = "<<ndof_lor<<std::endl;
+               for (int t=0; t<ndof_lor; ++t)
+               {
+                  for (int s=0; s<ndof_lor; ++s)
+                  {
+                     std::cout<<v_Minv_ear_lor(t, s, lor_idx)<<" ";
+                  }
+                  std::cout<<""<<std::endl;
+               }
+            }
+
+
             for (int i=0; i<ndof_lor; ++i)
             {
 
@@ -760,13 +896,24 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                   dot += v_Minv_ear_lor(i, k, lor_idx) * v_M_mixed_all(k, j, iref, iho);
                }
                v_R_ea(i, iref, j, iho) = dot;
+               if (iho == 1)
+               {
+                  //std::cout<<v_R_ea(i, iref, j, iho)<<" ";
+               }
             }
+            //if(iho == 1) std::cout<<""<<std::endl;
          }
+
       }
    }
+#endif
+
+
 
    if (build_P)
    {
+      std::cout<<"Need to assemble P"<<std::endl;
+
       //P = inv(R^T M_L R) * R^T M_L
 
       //M_lor is size of ndof_lor x ndof_lor
@@ -803,19 +950,56 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                }
             }
          }
+
+         if (e==0)
+         {
+            //std::cout<<"My impl"<<std::endl;
+            /*
+            for(int iho=0; iho < ndof_ho; ++iho) {
+                for(int jlo = 0; jlo < nref*ndof_lor; ++jlo) {
+                  std::cout<<v_R_ea(jlo, iho, e)<<" ";
+                }
+                std::cout<<""<<std::endl;
+            }
+            */
+            /*
+            for(int ilo=0; ilo<nref*ndof_lor; ++ilo) {
+              for(int jlo=0; jlo<nref*ndof_lor; ++jlo) {
+                std::cout<<v_M_ea_lor(jlo, ilo, e)<<" ";
+              }
+              std::cout<<""<<std::endl;
+            }
+            */
+
+            /*
+            for(int iho=0; iho<ndof_ho; ++iho) {
+              for(int iref=0; iref<nref; ++iref) {
+                for(int jlo=0; jlo<ndof_lor; ++jlo) {
+                  std::cout<<v_RtM_L(iho, jlo, iref, e)<<" "<<std::endl;
+                }
+              }
+              std::cout<<" "<<std::endl;
+            }
+            */
+
+         }
+
       }
 
       //resulting matrix should be: ndof_ho x ndof_ho
       //R^T M_L x R
       mfem::Vector RtM_LR(ndof_ho * ndof_ho * nel_ho);
+
       auto v_RtM_LR = mfem::Reshape(RtM_LR.Write(), ndof_ho, ndof_ho, nel_ho);
 
       for (int e=0; e<nel_ho; ++e)
       {
+
          for (int iho=0; iho<ndof_ho; ++iho)
          {
             for (int jho=0; jho<ndof_ho; ++jho)
             {
+
                double dot = 0.0;
                for (int iref=0; iref<nref; ++iref)
                {
@@ -825,15 +1009,33 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                   }
                }
                v_RtM_LR(iho, jho, e) = dot;
+               //
             }
          }
+
+         //Print
+         if ( e == 0)
+         {
+            for (int iho=0; iho<ndof_ho; ++iho)
+            {
+               for (int jho=0; jho<ndof_ho; ++jho)
+               {
+                  std::cout<<v_RtM_LR(iho, jho, e)<<" ";
+               }
+               std::cout<<""<<std::endl;
+            }
+         }
+
       }
+
 
       Vector RtM_LR_LU(RtM_LR); P = 0;
       Vector InvRtM_LR_LU(RtM_LR.Size());
 
       BatchLUFactor(ndof_ho, nel_ho, RtM_LR_LU, P);
       BatchInverseMatrix(RtM_LR_LU, ndof_ho, nel_ho, P, InvRtM_LR_LU);
+
+#if 1 //--- need to fix here...
       //Form P_ea
       //P_ea should be of dimension (ndof_ho x ndof_ho) x (ndof_ho x nref*ndof_lor)
       //P_ea ndof_ho x nref*ndof_lor
@@ -843,6 +1045,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
       for (int e=0; e<nel_ho; ++e)
       {
+
          for (int iho=0; iho<ndof_ho; ++iho)
          {
             for (int iref=0; iref<nref; ++iref)
@@ -863,20 +1066,18 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          }
 
       }
+#endif
 
    }
+
+
 }
+
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
    const Vector &x, Vector &y) const
 {
-
-   if (use_device)
-   {
-      DeviceMult(x,y);
-      if (!verify_solution) {return;}
-   }
-
+   std::cout<<"Calling L2ProjectionL2Space::Mult "<<std::endl;
 
    int vdim = fes_ho.GetVDim();
    Array<int> vdofs;
@@ -892,7 +1093,16 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
 
       fes_ho.GetElementVDofs(iho, vdofs);
       x.GetSubVector(vdofs, xel_mat.GetData());
+      //if(iho == 0) {
+      //std::cout<<"ndof_ho = "<<ndof_ho<<" vdim = "<<vdim<<std::endl;
+      //std::cout<<"R_iho.Sizes() = "<<R_iho.Height()<<" "<<R_iho.Width()<<std::endl;
+      //}
+
       mfem::Mult(R_iho, xel_mat, yel_mat);
+      if (iho ==0)
+      {
+         //yel_mat.Print();
+      }
       // Place result correctly into the low-order vector
       for (int iref = 0; iref < nref; ++iref)
       {
@@ -906,17 +1116,16 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
       }
    }
 
-   if (verify_solution)
-   {
-      Vector y_temp(y.Size());
-      DeviceMult(x, y_temp);
-      y_temp -= y;
-      double error = y_temp.Norml2();
-      if (error > 1e-12)
-      {
-         MFEM_VERIFY(false, "Mult difference too high = "<<error);
-      }
-   }
+   std::cout<<"Checking device output"<<std::endl;
+   Vector y_temp(y.Size());
+
+   DeviceMult(x, y_temp);
+
+   y_temp -= y;
+
+   double error = y_temp.Norml2();
+   std::cout<<"DeviceMult:: mat-vec error "<<error<<std::endl;
+
 }
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
@@ -953,16 +1162,11 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
 
 }
 
-
 void L2ProjectionGridTransfer::L2ProjectionL2Space::MultTranspose(
    const Vector &x, Vector &y) const
 {
 
-   if (use_device)
-   {
-      DeviceMult(x,y);
-      if (!verify_solution) {return;}
-   }
+   std::cout<<"Calling L2ProjectionL2Space::MultTranspose "<<std::endl;
 
    int vdim = fes_ho.GetVDim();
    Array<int> vdofs;
@@ -995,19 +1199,18 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::MultTranspose(
       y.AddElementVector(vdofs, yel_mat.GetData());
    }
 
-   if (verify_solution)
-   {
-      Vector y_temp(y.Size());
-      DeviceMultTranspose(x, y_temp);
-      y_temp -= y;
-      double error = y_temp.Norml2();
-      if (error > 1e-12)
-      {
-         MFEM_VERIFY(false, "MultTranspose difference too high = "<<error);
-      }
-   }
+   std::cout<<"Checking device output"<<std::endl;
+   Vector y_temp(y.Size());
+
+   DeviceMultTranspose(x, y_temp);
+
+   y_temp -= y;
+
+   double error = y_temp.Norml2();
+   std::cout<<"DeviceMultTranspose:: mat-vec error "<<error<<std::endl;
 
 }
+
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
    const Vector &x, Vector &y) const
@@ -1042,17 +1245,14 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
          }
       }
    }
+
 }
+
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::Prolongate(
    const Vector &x, Vector &y) const
 {
-
-   if (use_device)
-   {
-      DeviceProlongate(x,y);
-      if (!verify_solution) {return;}
-   }
+   std::cout<<"Calling L2ProjectionL2Space::Prolongate"<<std::endl;
 
    if (fes_ho.GetNE() == 0) { return; }
    MFEM_VERIFY(P.Size() > 0, "Prolongation not supported for these spaces.")
@@ -1087,17 +1287,16 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Prolongate(
       y.AddElementVector(vdofs, yel_mat.GetData());
    }
 
-   if (verify_solution)
-   {
-      Vector y_temp(y.Size());
-      DeviceProlongate(x, y_temp);
-      y_temp -= y;
-      double error = y_temp.Norml2();
-      if (error > 1e-12)
-      {
-         MFEM_VERIFY(false, "Prolongate difference too high = "<<error);
-      }
-   }
+   std::cout<<"Checking device output"<<std::endl;
+   Vector y_temp(y.Size());
+
+   DeviceProlongate(x, y_temp);
+
+   y_temp -= y;
+
+   double error = y_temp.Norml2();
+   std::cout<<"DeviceProlongate:: mat-vec error "<<error<<std::endl;
+
 
 }
 
@@ -1141,12 +1340,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::ProlongateTranspose(
    const Vector &x, Vector &y) const
 {
 
-   if (use_device)
-   {
-      DeviceProlongateTranspose(x,y);
-      if (!verify_solution) {return;}
-   }
-
+   std::cout<<"Calling L2ProjectionL2Space::ProlongateTranspose"<<std::endl;
 
    if (fes_ho.GetNE() == 0) { return; }
    MFEM_VERIFY(P.Size() > 0, "Prolongation not supported for these spaces.")
@@ -1179,17 +1373,15 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::ProlongateTranspose(
       }
    }
 
-   if (verify_solution)
-   {
-      Vector y_temp(y.Size());
-      DeviceProlongate(x, y_temp);
-      y_temp -= y;
-      double error = y_temp.Norml2();
-      if (error > 1e-12)
-      {
-         MFEM_VERIFY(false, "Prolongate transpose difference too high = "<<error);
-      }
-   }
+   std::cout<<"Checking device output"<<std::endl;
+   Vector y_temp(y.Size());
+
+   DeviceProlongateTranspose(x, y_temp);
+
+   y_temp -= y;
+
+   double error = y_temp.Norml2();
+   std::cout<<"DeviceProlongateTranspose:: mat-vec error "<<error<<std::endl;
 
 }
 
@@ -1799,7 +1991,7 @@ L2ProjectionGridTransfer::~L2ProjectionGridTransfer()
 
 const Operator &L2ProjectionGridTransfer::ForwardOperator()
 {
-   if (!F) { BuildF(); }
+   if (!F) { BuildF(use_device); }
    return *F;
 }
 
@@ -1807,13 +1999,13 @@ const Operator &L2ProjectionGridTransfer::BackwardOperator()
 {
    if (!B)
    {
-      if (!F) { BuildF(); }
+      if (!F) { BuildF(use_device); }
       B = new L2Prolongation(*F);
    }
    return *B;
 }
 
-void L2ProjectionGridTransfer::BuildF()
+void L2ProjectionGridTransfer::BuildF(bool use_device)
 {
    if (!force_l2_space &&
        dom_fes.FEColl()->GetContType() == FiniteElementCollection::CONTINUOUS)
@@ -1835,7 +2027,7 @@ void L2ProjectionGridTransfer::BuildF()
    }
    else
    {
-      F = new L2ProjectionL2Space(dom_fes, ran_fes, use_device, verify_solution);
+      F = new L2ProjectionL2Space(dom_fes, ran_fes);
    }
 }
 

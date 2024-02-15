@@ -41,6 +41,7 @@ protected:
    OperatorHandle bw_t_oper; ///< Backward true-dof operator
 
    bool use_device;
+   bool verify_solution;
 
 #ifdef MFEM_USE_MPI
    bool parallel;
@@ -68,6 +69,10 @@ public:
    virtual ~GridTransfer() { }
 
    void UseDevice(bool device) { use_device = device;}
+
+   void VerifySolution(bool verify) { verify_solution = verify;}
+
+
 
    /** @brief Set the desired Operator::Type for the construction of all
        operators defined by the underlying transfer algorithm. */
@@ -174,6 +179,10 @@ public:
 class L2ProjectionGridTransfer : public GridTransfer
 {
 protected:
+
+   //static bool UsingDevice() {return use_device;}
+   //bool VerifySolution() {return verify_solution;}
+
    /** Abstract class representing projection operator between a high-order
        finite element space on a coarse mesh, and a low-order finite element
        space on a refined mesh (LOR). We assume that the low-order space,
@@ -217,6 +226,7 @@ protected:
                          DenseMatrix& B_L, DenseMatrix& B_H) const;
    };
 
+
    /** Class for projection operator between a L2 high-order finite element
        space on a coarse mesh, and a L2 low-order finite element space on a
        refined mesh (LOR). */
@@ -231,9 +241,12 @@ protected:
       mutable Array<double> R_ea, P_ea;
       Array<int> offsets;
 
+      const bool use_device, verify_solution;
+
    public:
       L2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
-                          const FiniteElementSpace& fes_lor_);
+                          const FiniteElementSpace& fes_lor_,
+                          const bool use_device_, const bool verify_solution_);
 
       /*Same as above but assembles and stores R_ea, P_ea */
       void DeviceL2ProjectionL2Space(const FiniteElementSpace& fes_ho_,
@@ -286,7 +299,11 @@ protected:
 
       virtual void SetRelTol(double p_rtol_) { } ///< No-op.
       virtual void SetAbsTol(double p_atol_) { } ///< No-op.
+
+      //friend class L2ProjectionGridTransfer;
    };
+
+   friend class L2ProjectionL2Space;
 
    /** Projection operator between a H1 high-order finite element space on a
        coarse mesh, and a H1 low-order finite element space on a refined mesh
@@ -419,7 +436,8 @@ public:
 
    virtual bool SupportsBackwardsOperator() const;
 private:
-   void BuildF(bool use_device);
+   void BuildF();
+
 };
 
 /// Matrix-free transfer operator between finite element spaces
