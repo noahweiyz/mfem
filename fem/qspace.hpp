@@ -1,4 +1,4 @@
-// Copyright (c) 2010-2023, Lawrence Livermore National Security, LLC. Produced
+// Copyright (c) 2010-2024, Lawrence Livermore National Security, LLC. Produced
 // at the Lawrence Livermore National Laboratory. All Rights reserved. See files
 // LICENSE and NOTICE for details. LLNL-CODE-806117.
 //
@@ -87,7 +87,8 @@ public:
    ///
    /// For a QuadratureSpace defined on elements, this just returns the element
    /// index. For FaceQuadratureSpace, the returned index depends on the chosen
-   /// FaceType.
+   /// FaceType. If the entity is not found (for example, if @a T represents an
+   /// interior face, and the space has FaceType::Boundary) then -1 is returned.
    virtual int GetEntityIndex(const ElementTransformation &T) const = 0;
 
    /// Write the QuadratureSpace to the stream @a out.
