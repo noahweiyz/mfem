@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
 {
    // Parse command-line options.
    const char *mesh_file = "../../data/star.mesh";
-   int order = 1;
+   int order = 3;
    int lref = order+1;
    int lorder = 0;
    bool vis = true;
@@ -169,9 +169,9 @@ int main(int argc, char *argv[])
    }
 
    gt->UseDevice(true);
-   
+   gt->VerifySolution(true);
+
    const Operator &R = gt->ForwardOperator();
-   //const L2ProjectionL2Space &R = 
 
    // HO->LOR restriction
    direction = "HO -> LOR @ LOR";
@@ -179,11 +179,6 @@ int main(int argc, char *argv[])
    compute_mass(&fespace_lor, ho_mass, LOR_dc, "R(HO)    ");
    if (vis) { visualize(LOR_dc, "R(HO)", Wx, Wy); Wx += offx; }
 
-   std::cout<<"Number of elements = "<<mesh.GetNE()<<std::endl;
-   
-   std::cout<<"exit early"<<std::endl;
-   exit(-1);
-   
    if (gt->SupportsBackwardsOperator())
    {
       const Operator &P = gt->BackwardOperator();
