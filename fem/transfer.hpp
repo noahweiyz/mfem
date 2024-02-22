@@ -178,7 +178,8 @@ public:
     smaller than the number of coarse dofs. */
 class L2ProjectionGridTransfer : public GridTransfer
 {
-protected:
+  //protected:
+public:
 
    //static bool UsingDevice() {return use_device;}
    //bool VerifySolution() {return verify_solution;}

@@ -456,12 +456,12 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
       double R_error = 0.0, P_error = 0.0;
       for (int i=0; i<R.Size(); ++i)
       {
-         R_error += fabs(R[i] - R_ea[i]);
+         R_error += fabs(R[i] - R_ea.HostRead()[i]);
       }
 
       for (int j=0; j<P.Size(); ++j)
       {
-         P_error += fabs(P[j] - P_ea[j]);
+         P_error += fabs(P[j] - P_ea.HostRead()[j]);
       }
 
       if (R_error > 1e-12 || P_error > 1e-12)
@@ -566,6 +566,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
          const auto W = Reshape(ir->GetWeights().Read(), Q1D, Q1D);
          const auto J = Reshape(geo_facts->detJ.Read(), Q1D,Q1D, nel_lor);
+         const auto d_D = Reshape(D.Write(), qPts, nref, nel_ho);
 
          MFEM_ASSERT(nel_ho*nref == nel_lor, "we expect nel_ho*nref == nel_lor");
          std::cout<<"nel_ho = "<<nel_ho<<" nel_ho*nref  "<<nel_ho*nref<<" "<<nel_lor<<std::endl;
@@ -573,7 +574,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          //*********************************
          // Setup data at quadrature points
          //*********************************
-         for (int iho=0; iho<nel_ho; ++iho)
+         //for (int iho=0; iho<nel_ho; ++iho)
+         mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
          {
             for (int iref = 0; iref < nref; ++iref)
             {
@@ -587,12 +589,12 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
                      int q = qx + Q1D*qy;
                      const double detJ = J(qx, qy, lo_el_id);
-                     D(q, iref, iho) = W(qx, qy) * detJ;
+                     d_D(q, iref, iho) = W(qx, qy) * detJ;
                   }
                }
 
             }
-         }
+         });
 
          emb_tr.SetIdentityTransformation(geom);
          const DenseTensor &pmats = cf_tr.point_matrices[geom];
@@ -684,22 +686,29 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       auto v_M_mixed_all = mfem::Reshape(M_mixed_all.Write(), ndof_lor, ndof_ho, nref,
                                          nel_ho);
 
-      for (int iho=0; iho<nel_ho; ++iho)
+      const int fe_ho_ndof = fe_ho.GetDof();
+      const int fe_lor_ndof = fe_lor.GetDof();
+
+      auto d_B_L = mfem::Reshape(B_L.Read(), qPts, fe_lor_ndof, nref);
+      auto d_B_H = mfem::Reshape(B_H.Read(), qPts, fe_ho_ndof, nref);
+      auto d_D   = mfem::Reshape(D.Read(), qPts, nref, nel_ho);
+
+      //for (int iho=0; iho<nel_ho; ++iho)
+      mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
       {
 
          for (int iref = 0; iref < nref; ++iref)
          {
-
             // (B_lo_dofs x Q) x (Q x B_ho_dofs)
-            for (int bh=0; bh<fe_ho.GetDof(); ++bh)
+            for (int bh=0; bh<fe_ho_ndof; ++bh)
             {
-               for (int bl=0; bl<fe_lor.GetDof(); ++bl)
+               for (int bl=0; bl<fe_lor_ndof; ++bl)
                {
 
                   double dot = 0.0;
                   for (int qi=0; qi<qPts; ++qi)
                   {
-                     dot += B_L(qi, bl, iref) *  D(qi, iref, iho) * B_H(qi, bh, iref);
+                    dot += d_B_L(qi, bl, iref) *  d_D(qi, iref, iho) * d_B_H(qi, bh, iref);
                   }
 
                   //column major storange
@@ -708,7 +717,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
             }
 
          }
-      }
+      });
    } // end of mixed assembly mass matrix
 
 
@@ -743,7 +752,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    MFEM_VERIFY(nel_lor==nel_ho*nref, "nel_lor != nel_ho*nref");
 
    // (ndofs_lor x ndofs_lor) x (ndofs_lor x ndof_ho)
-   for (int iho = 0; iho<nel_ho; ++iho)
+   //for (int iho = 0; iho<nel_ho; ++iho)
+   mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int j=0; j<ndof_ho; ++j)
       {
@@ -763,7 +773,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
             }
          }
       }
-   }
+   });
 
    if (build_P)
    {
@@ -779,7 +789,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       mfem::Vector RtM_L(ndof_ho*nref*ndof_lor*nel_ho);
       auto v_RtM_L = mfem::Reshape(RtM_L.Write(), ndof_ho, ndof_lor, nref, nel_ho);
 
-      for (int e=0; e<nel_ho; ++e)
+      //for (int e=0; e<nel_ho; ++e)
+      mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
 
          for (int iho=0; iho<ndof_ho; ++iho)
@@ -803,14 +814,15 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                }
             }
          }
-      }
+      });
 
       //resulting matrix should be: ndof_ho x ndof_ho
       //R^T M_L x R
       mfem::Vector RtM_LR(ndof_ho * ndof_ho * nel_ho);
       auto v_RtM_LR = mfem::Reshape(RtM_LR.Write(), ndof_ho, ndof_ho, nel_ho);
 
-      for (int e=0; e<nel_ho; ++e)
+      //for (int e=0; e<nel_ho; ++e)
+      mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
          for (int iho=0; iho<ndof_ho; ++iho)
          {
@@ -827,9 +839,17 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                v_RtM_LR(iho, jho, e) = dot;
             }
          }
-      }
+      });
 
-      Vector RtM_LR_LU(RtM_LR); P = 0;
+      Vector RtM_LR_LU(RtM_LR.Size());
+      RtM_LR_LU.UseDevice(true);
+      RtM_LR_LU = RtM_LR;
+      //P = 0;
+      int *d_P = P.Write();
+      mfem::forall(P.Size(), [=] MFEM_HOST_DEVICE (int idx) {
+          d_P[idx] = 0;
+      });
+
       Vector InvRtM_LR_LU(RtM_LR.Size());
 
       BatchLUFactor(ndof_ho, nel_ho, RtM_LR_LU, P);
@@ -841,7 +861,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                                           nel_ho);
       auto v_P_ea = mfem::Reshape(P_ea.Write(), ndof_ho, ndof_lor, nref, nel_ho);
 
-      for (int e=0; e<nel_ho; ++e)
+      //for (int e=0; e<nel_ho; ++e)
+      mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
          for (int iho=0; iho<ndof_ho; ++iho)
          {
@@ -862,7 +883,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
          }
 
-      }
+      });
 
    }
 }
@@ -934,7 +955,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
    auto v_x    = mfem::Reshape(x.Read(), ndof_ho, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_lor, nref, nel_ho);
 
-   for (int iho = 0; iho < nel_ho; ++iho)
+   //for (int iho = 0; iho < nel_ho; ++iho)
+   mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int i=0; i<nref; ++i)
       {
@@ -949,7 +971,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
             v_y(j, i, iho) = dot;
          }
       }
-   }
+   });
 
 }
 
@@ -1024,7 +1046,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
    auto v_x    = mfem::Reshape(x.Read(), ndof_lor, nref, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_ho, nel_ho);
 
-   for (int iho = 0; iho < nel_ho; ++iho)
+   //for (int iho = 0; iho < nel_ho; ++iho)
+   mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int k=0; k<ndof_ho; ++k)
       {
@@ -1041,7 +1064,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
             v_y(k, iho) = dot;
          }
       }
-   }
+   });
 }
 
 void L2ProjectionGridTransfer::L2ProjectionL2Space::Prolongate(
@@ -1117,7 +1140,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceProlongate(
    auto v_x    = mfem::Reshape(x.Read(), ndof_lor, nref, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_ho, nel_ho);
 
-   for (int e = 0; e < nel_ho; ++e)
+   //for (int e = 0; e < nel_ho; ++e)
+   mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
    {
       for (int iho=0; iho<ndof_ho; ++iho)
       {
@@ -1133,7 +1157,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceProlongate(
          v_y(iho, e) = dot;
 
       }
-   }
+   });
 
 }
 
@@ -1182,7 +1206,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::ProlongateTranspose(
    if (verify_solution)
    {
       Vector y_temp(y.Size());
-      DeviceProlongate(x, y_temp);
+      DeviceProlongateTranspose(x, y_temp);
       y_temp -= y;
       double error = y_temp.Norml2();
       if (error > 1e-12)
@@ -1209,7 +1233,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceProlongateTranspose(
    auto v_x    = mfem::Reshape(x.Read(), ndof_ho, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_lor, nref, nel_ho);
 
-   for (int e = 0; e < nel_ho; ++e)
+   //for (int e = 0; e < nel_ho; ++e)
+   mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
    {
       for (int iref=0; iref<nref; ++iref)
       {
@@ -1225,7 +1250,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceProlongateTranspose(
 
          }
       }
-   }
+   });
 
 }
 
