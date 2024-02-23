@@ -90,10 +90,10 @@ struct Enzyme {};
 struct DualType {};
 };
 
-int enzyme_dup;
-int enzyme_dupnoneed;
-int enzyme_out;
-int enzyme_const;
+extern int enzyme_dup;
+extern int enzyme_dupnoneed;
+extern int enzyme_out;
+extern int enzyme_const;
 
 template <typename return_type, typename... T>
 return_type __enzyme_fwddiff(void *, T...);
@@ -127,6 +127,11 @@ struct Field
          const ParGridFunction *
          > data;
 
+   std::string label;
+};
+
+struct DependentField
+{
    std::string label;
 };
 
@@ -1163,18 +1168,18 @@ public:
       // variable to be the dependent variable in the JvP.
       //
       // This index is the field that the residual is differentiated wrt.
-      constexpr int primary_variable_idx = 0;
+      dependent_field_idx = 0;
 
-      bool contains_dependent_input = std::apply([&](auto ...input)
-      {
-         auto check_dependency = [&](auto &input)
-         {
-            return solutions.size() &&
-                   (input.name == solutions[primary_variable_idx].label);
-         };
-         return (check_dependency(input) || ...);
-      },
-      qf.inputs);
+      // bool contains_dependent_input = std::apply([&](auto ...input)
+      // {
+      //    auto check_dependency = [&](auto &input)
+      //    {
+      //       return solutions.size() &&
+      //              (input.name == solutions[dependent_field_idx].label);
+      //    };
+      //    return (check_dependency(input) || ...);
+      // },
+      // qf.inputs);
 
       const int num_el = mesh.GetNE();
       const int num_qp = ir.GetNPoints();
@@ -1372,7 +1377,6 @@ public:
          prolongation_transpose = [&](Vector &r_local, Vector &y)
          {
             double local_sum = r_local.Sum();
-            out << "local sum rank " << Mpi::WorldRank() << ": " << local_sum << "\n";
             MPI_Allreduce(&local_sum, y.GetData(), 1, MPI_DOUBLE, MPI_SUM, mesh.GetComm());
             MFEM_ASSERT(y.Size() == 1, "output size doesn't match kernel description");
          };
@@ -1383,17 +1387,45 @@ public:
          return;
       }
 
-      if (contains_dependent_input)
+      // Allocate memory for directions on quadrature points
+      std::vector<Vector> directions_qp_mem;
+      std::apply(
+         [&](auto &&...input)
       {
-         // Check which qf inputs are dependent on the primary variable
+         (directions_qp_mem.emplace_back(
+             Vector(input.size_on_qp * num_qp * num_el)),
+          ...);
+      },
+      qf.inputs);
+
+      for (auto &v : directions_qp_mem)
+      {
+         v = 0.0;
+      }
+
+      qf_args shadow_args{};
+      allocate_qf_args(shadow_args, qf.inputs);
+
+      jvp_integrators.emplace_back(
+         [&, args, shadow_args, qfinput_to_field,
+             fields_qp_mem,
+             directions_qp_mem, residual_qp_mem,
+             residual_size_on_qp,
+             test_space_field_idx, output_fd, dtqmaps,
+             integration_weights_mem, num_qp,
+             num_el](Vector &y_e) mutable
+      {
+         // Check which qf inputs are dependent on the dependent variable
          std::array<bool, num_qfinputs> qfinput_is_dependent;
+         bool no_qfinput_is_dependent = true;
          for (int i = 0; i < qfinput_is_dependent.size(); i++)
          {
-            if (qfinput_to_field[i] == primary_variable_idx)
+            if (qfinput_to_field[i] == dependent_field_idx)
             {
+               no_qfinput_is_dependent = false;
                qfinput_is_dependent[i] = true;
-               out << "function input " << i << " is dependent on "
-                   << fields[qfinput_to_field[i]].label << "\n";
+               // out << "function input " << i << " is dependent on "
+               //     << fields[qfinput_to_field[i]].label << "\n";
             }
             else
             {
@@ -1401,99 +1433,74 @@ public:
             }
          }
 
-         // Allocate memory for directions on quadrature points
-         std::vector<Vector> directions_qp_mem;
-         std::apply(
-            [&](auto &&...input)
+         if (no_qfinput_is_dependent)
          {
-            (directions_qp_mem.emplace_back(
-                Vector(input.size_on_qp * num_qp * num_el)),
-             ...);
-         },
-         qf.inputs);
-
-         for (auto &v : directions_qp_mem)
-         {
-            v = 0.0;
+            return;
          }
 
-         qf_args shadow_args{};
-         allocate_qf_args(shadow_args, qf.inputs);
+         auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim, num_qp);
 
-         jacobian_integrators.emplace_back(
-            [&, args, shadow_args, qfinput_to_field,
-                qfinput_is_dependent,
-                fields_qp_mem,
-                directions_qp_mem, residual_qp_mem,
-                residual_size_on_qp,
-                test_space_field_idx, output_fd, dtqmaps,
-                integration_weights_mem, num_qp,
-                num_el](Vector &y_e) mutable
+         const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
+                                          residual_size_on_qp, num_qp, num_el);
+
+         // Fields interpolated to the quadrature points in the order of quadrature
+         // function arguments
+         std::vector<DeviceTensor<2>> fields_qp;
+         map_inputs_to_memory(fields_qp, fields_qp_mem, num_qp, qf.inputs,
+                              std::make_index_sequence<num_qfinputs>{});
+
+         std::vector<DeviceTensor<2>> directions_qp;
+         map_inputs_to_memory(directions_qp, directions_qp_mem, num_qp, qf.inputs,
+                              std::make_index_sequence<num_qfinputs>{});
+
+         DeviceTensor<1, const double> integration_weights(
+            integration_weights_mem.Read(), num_qp);
+
+         for (int el = 0; el < num_el; el++)
          {
-            auto dtqmaps_tensor = map_dtqmaps(dtqmaps, dim, num_qp);
-
-            const auto residual_qp = Reshape(residual_qp_mem.ReadWrite(),
-                                             residual_size_on_qp, num_qp, num_el);
-
-            // Fields interpolated to the quadrature points in the order of quadrature
-            // function arguments
-            std::vector<DeviceTensor<2>> fields_qp;
-            map_inputs_to_memory(fields_qp, fields_qp_mem, num_qp, qf.inputs,
-            std::make_index_sequence<num_qfinputs>{});
-
-            std::vector<DeviceTensor<2>> directions_qp;
-            map_inputs_to_memory(directions_qp, directions_qp_mem, num_qp, qf.inputs,
-            std::make_index_sequence<num_qfinputs>{});
-
-            DeviceTensor<1, const double> integration_weights(
-               integration_weights_mem.Read(), num_qp);
-
-            for (int el = 0; el < num_el; el++)
-            {
-               // B
-               // prepare fields on quadrature points
-               map_fields_to_quadrature_data<num_qfinputs>(
-                  fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
-                  integration_weights, qf.inputs,
+            // B
+            // prepare fields on quadrature points
+            map_fields_to_quadrature_data<num_qfinputs>(
+               fields_qp, el, fields_e, qfinput_to_field, dtqmaps_tensor,
+               integration_weights, qf.inputs,
                std::make_index_sequence<num_qfinputs> {});
 
-               // prepare directions (shadow memory)
-               map_fields_to_quadrature_data_conditional<num_qfinputs>(
-                  directions_qp, el,
-                  directions_e, primary_variable_idx,
-                  dtqmaps_tensor,
-                  integration_weights,
-                  qfinput_is_dependent,
-                  qf.inputs,
-                  std::make_index_sequence<num_qfinputs> {});
+            // prepare directions (shadow memory)
+            map_fields_to_quadrature_data_conditional<num_qfinputs>(
+               directions_qp, el,
+               directions_e, dependent_field_idx,
+               dtqmaps_tensor,
+               integration_weights,
+               qfinput_is_dependent,
+               qf.inputs,
+               std::make_index_sequence<num_qfinputs> {});
 
-               // D -> D
-               for (int qp = 0; qp < num_qp; qp++)
+            // D -> D
+            for (int qp = 0; qp < num_qp; qp++)
+            {
+               Vector f_qp;
+               auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
+               if constexpr (std::is_same<ad_method, AD::Enzyme> {})
                {
-                  Vector f_qp;
-                  auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
-                  if constexpr (std::is_same<ad_method, AD::Enzyme> {})
-                  {
-                     f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
-                                                    directions_qp, qp);
-                  }
-                  else if constexpr (std::is_same<ad_method, AD::DualType> {})
-                  {
-                     f_qp = apply_qf_fwddiff_dualtype(qf.func, args, fields_qp,
-                                                      directions_qp, qp);
-                  }
-                  for (int i = 0; i < residual_size_on_qp; i++)
-                  {
-                     r_qp(i) = f_qp(i);
-                  }
+                  f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
+                                                 directions_qp, qp);
                }
-
-               // B^T
-               map_quadrature_data_to_fields(y_e, el, num_el, residual_qp, output_fd,
-                                             dtqmaps_tensor, test_space_field_idx);
+               else if constexpr (std::is_same<ad_method, AD::DualType> {})
+               {
+                  f_qp = apply_qf_fwddiff_dualtype(qf.func, args, fields_qp,
+                                                   directions_qp, qp);
+               }
+               for (int i = 0; i < residual_size_on_qp; i++)
+               {
+                  r_qp(i) = f_qp(i);
+               }
             }
-         });
-      }
+
+            // B^T
+            map_quadrature_data_to_fields(y_e, el, num_el, residual_qp, output_fd,
+                                          dtqmaps_tensor, test_space_field_idx);
+         }
+      });
    }
 
    void Mult(const Vector &x, Vector &y) const override
@@ -1508,7 +1515,7 @@ public:
       element_restriction(parameters, fields_e, solutions.size());
 
       // BEGIN GPU
-      // B^T Q B x
+      // B^T D B x
       residual_e = 0.0;
       for (int i = 0; i < residual_integrators.size(); i++)
       {
@@ -1541,13 +1548,13 @@ public:
       element_restriction(parameters, fields_e, solutions.size());
 
       // BEGIN GPU
-      // B^T Q B x
+      // B^T D B x
       Vector &jvp_e = residual_e;
 
       jvp_e = 0.0;
-      for (int i = 0; i < jacobian_integrators.size(); i++)
+      for (int i = 0; i < jvp_integrators.size(); i++)
       {
-         jacobian_integrators[i](jvp_e);
+         jvp_integrators[i](jvp_e);
       }
       // END GPU
 
@@ -1579,7 +1586,8 @@ public:
    std::vector<Field> fields;
 
    std::vector<std::function<void(Vector &)>> residual_integrators;
-   std::vector<std::function<void(Vector &)>> jacobian_integrators;
+   std::vector<std::function<void(Vector &)>> jvp_integrators;
+
    std::function<void(Vector &, Vector &)> element_restriction_transpose;
    std::function<void(Vector &, Vector &)> prolongation_transpose;
 
@@ -1596,4 +1604,6 @@ public:
    mutable Vector current_direction_t, current_state_t;
 
    Array<int> ess_tdof_list;
+
+   int dependent_field_idx;
 };

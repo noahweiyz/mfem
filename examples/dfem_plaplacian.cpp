@@ -27,7 +27,7 @@ int main(int argc, char *argv[])
    ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
    mesh_serial.Clear();
 
-   constexpr int vdim = 2;
+   constexpr int vdim = 1;
 
    H1_FECollection h1fec(polynomial_order, dim);
    ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
@@ -45,54 +45,48 @@ int main(int argc, char *argv[])
 
    ParGridFunction u(&h1fes);
 
-   auto exact_solution = [](const Vector &coords, Vector &u)
+   auto exact_solution = [](const Vector &coords)
    {
       const double x = coords(0);
       const double y = coords(1);
-      u(0) = x*x + y;
-      u(1) = x + 0.5*y*y;
+      // PRESENT
+      return pow(x,2) + 0.5*x*pow(y,2);
    };
 
-   VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
+   FunctionCoefficient exact_solution_coeff(exact_solution);
 
-   auto elasticity_kernel = [](tensor<dual<double, double>, 2, 2> dudxi,
-                               tensor<double, 2, 2> J,
-                               double w)
+   auto plaplacian = [](double u,
+                        tensor<double, 2> dudxi,
+                        tensor<double, 2, 2> J,
+                        double w)
    {
       using mfem::internal::tensor;
-      using mfem::internal::IsotropicIdentity;
-
-      double lambda, mu;
-      {
-         lambda = 1.0;
-         mu = 1.0;
-      }
-      static constexpr auto I = IsotropicIdentity<2>();
-      auto eps = sym(dudxi * inv(J));
+      int p = 2;
+      auto dudx = dudxi * inv(J);
       auto JxW = transpose(inv(J)) * det(J) * w;
-      auto r = (lambda * tr(eps) * I + 2.0 * mu * eps) * JxW;
-      return r;
+      // PRESENT: Implement (1+u^2) * ∇u
+      return (1.0+u*u) * dudx * JxW;
    };
 
-   std::tuple input_descriptors = {Gradient{"displacement"}, Gradient{"coordinates"}, Weight{"integration_weight"}};
+   // PRESENT: Implement descriptors
+   std::tuple input_descriptors = {Value{"potential"}, Gradient{"potential"}, Gradient{"coordinates"}, Weight{"dawdaw"}};
 
-   std::tuple output_descriptors = {Gradient{"displacement"}};
+   // PRESENT: Implement descriptors
+   std::tuple output_descriptors = {Gradient{"potential"}};
 
-   ElementOperator qf {elasticity_kernel, input_descriptors, output_descriptors};
+   ElementOperator qf {plaplacian, input_descriptors, output_descriptors};
 
    ElementOperator forcing_qf
    {
-      [](tensor<double, 2> x, tensor<double, 2, 2> J, double w)
+      [](tensor<double, 2> coords, tensor<double, 2, 2> J, double w)
       {
-         double lambda, mu;
-         {
-            lambda = 1.0;
-            mu = 1.0;
-         }
-         auto f = x;
-         f(0) = 4.0*mu + 2.0*lambda;
-         f(1) = 2.0*mu + lambda;
-         return f * det(J) * w;
+         int p = 2;
+         double x = coords(0);
+         double y = coords(1);
+         // *INDENT-OFF*
+         double mathematica_please_help_me = 2.*pow(x,2)*pow(y,2)*(pow(x,2) + 0.5*x*pow(y,2)) + 2*pow(2*x + 0.5*pow(y,2),2)*(pow(x,2) + 0.5*x*pow(y,2)) + 2*(1 + pow(pow(x,2) + 0.5*x*pow(y,2),2)) + 1.*x*(1 + pow(pow(x,2) + 0.5*x*pow(y,2),2));
+         return mathematica_please_help_me * det(J) * w;
+        // *INDENT-ON*
       },
       // inputs
       std::tuple{
@@ -101,13 +95,14 @@ int main(int argc, char *argv[])
          Weight{"integration_weight"}},
       // outputs
       std::tuple{
-         Value{"displacement"}}
+         Value{"potential"}}
    };
 
-   std::vector<Field> solutions{{&u, "displacement"}};
+   std::vector<Field> solutions{{&u, "potential"}};
    std::vector<Field> parameters{{mesh.GetNodes(), "coordinates"}};
    DifferentiableForm dop(solutions, parameters, mesh);
 
+   // PRESENT: Explain why this is great
    dop.AddElementOperator<AD::Enzyme>(qf, ir);
    dop.AddElementOperator<AD::None>(forcing_qf, ir);
    dop.SetEssentialTrueDofs(ess_tdof_list);
