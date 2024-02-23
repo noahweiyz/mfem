@@ -67,26 +67,15 @@ int main(int argc, char *argv[])
       return sqnorm(u) * det(J) * w;
    };
 
-   ElementOperator objective_eop
-   {
-      objective,
-      std::tuple{
-         Value{"displacement"},
-         Value{"density"},
-         Gradient{"coordinates"},
-         Weight{"integration_weight"}},
-      // outputs (return values)
-      std::tuple{
-         One{"integral"}
-      }
-   };
+   std::tuple inputs{Value{"displacement"}, Value{"density"}, Gradient{"coordinates"}, Weight{"integration_weight"}};
+   std::tuple outputs{ One{"integral"} };
+   ElementOperator objective_eop { objective, inputs, outputs };
 
-   std::vector<Field> solution_fields = {{&u, "displacement"}};
-   std::vector<Field> parameter_fields = {{mesh.GetNodes(), "coordinates"}, {&rho, "density"}};
-   DifferentiableForm dop(solution_fields, parameter_fields, mesh);
-
-   // std::vector<DependentField> dependent_fields = {{"displacement"}};
-   // DifferentiableForm dop(solution_fields, parameter_fields, dependent_fields, mesh);
+   std::vector<Field> solution_fields{{&u, "displacement"}};
+   std::vector<Field> parameter_fields{{mesh.GetNodes(), "coordinates"}, {&rho, "density"}};
+   std::vector<Field> dependent_variables{{&u, "displacement"}};
+   DifferentiableForm dop(solution_fields, parameter_fields, dependent_variables,
+                          mesh);
 
    dop.AddElementOperator(objective_eop, ir);
 

@@ -55,7 +55,7 @@ int main(int argc, char *argv[])
 
    VectorFunctionCoefficient exact_solution_coeff(dim, exact_solution);
 
-   auto elasticity_kernel = [](tensor<dual<double, double>, 2, 2> dudxi,
+   auto elasticity_kernel = [](tensor<double, 2, 2> dudxi,
                                tensor<double, 2, 2> J,
                                double w)
    {
@@ -75,9 +75,7 @@ int main(int argc, char *argv[])
    };
 
    std::tuple input_descriptors = {Gradient{"displacement"}, Gradient{"coordinates"}, Weight{"integration_weight"}};
-
    std::tuple output_descriptors = {Gradient{"displacement"}};
-
    ElementOperator qf {elasticity_kernel, input_descriptors, output_descriptors};
 
    ElementOperator forcing_qf
@@ -106,7 +104,8 @@ int main(int argc, char *argv[])
 
    std::vector<Field> solutions{{&u, "displacement"}};
    std::vector<Field> parameters{{mesh.GetNodes(), "coordinates"}};
-   DifferentiableForm dop(solutions, parameters, mesh);
+   std::vector<Field> dependent_fields{{mesh.GetNodes(), "coordinates"}};
+   DifferentiableForm dop(solutions, parameters, dependent_fields, mesh);
 
    dop.AddElementOperator<AD::Enzyme>(qf, ir);
    dop.AddElementOperator<AD::None>(forcing_qf, ir);
