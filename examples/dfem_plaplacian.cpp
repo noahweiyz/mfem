@@ -61,16 +61,14 @@ int main(int argc, char *argv[])
                         double w)
    {
       using mfem::internal::tensor;
-      int p = 2;
       auto dudx = dudxi * inv(J);
       auto JxW = transpose(inv(J)) * det(J) * w;
       // PRESENT: Implement (1+u^2) * ∇u
-      return (1.0+u*u) * dudx * JxW;
+      return (1.0 + u*u) * dudx * JxW;
    };
 
    // PRESENT: Implement descriptors
-   std::tuple input_descriptors = {Value{"potential"}, Gradient{"potential"}, Gradient{"coordinates"}, Weight{"dawdaw"}};
-
+   std::tuple input_descriptors = {Value{"potential"}, Gradient{"potential"}, Gradient{"coordinates"}, Weight{"dwadw"}};
    // PRESENT: Implement descriptors
    std::tuple output_descriptors = {Gradient{"potential"}};
 
@@ -100,7 +98,8 @@ int main(int argc, char *argv[])
 
    std::vector<Field> solutions{{&u, "potential"}};
    std::vector<Field> parameters{{mesh.GetNodes(), "coordinates"}};
-   DifferentiableForm dop(solutions, parameters, mesh);
+   std::vector<Field> dependent_variables{{&u, "potential"}};
+   DifferentiableForm dop(solutions, parameters, dependent_variables, mesh);
 
    // PRESENT: Explain why this is great
    dop.AddElementOperator<AD::Enzyme>(qf, ir);

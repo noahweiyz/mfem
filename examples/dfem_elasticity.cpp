@@ -104,7 +104,7 @@ int main(int argc, char *argv[])
 
    std::vector<Field> solutions{{&u, "displacement"}};
    std::vector<Field> parameters{{mesh.GetNodes(), "coordinates"}};
-   std::vector<Field> dependent_fields{{mesh.GetNodes(), "coordinates"}};
+   std::vector<Field> dependent_fields{{&u, "displacement"}};
    DifferentiableForm dop(solutions, parameters, dependent_fields, mesh);
 
    dop.AddElementOperator<AD::Enzyme>(qf, ir);
