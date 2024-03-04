@@ -1284,13 +1284,20 @@ public:
 
       Vector residual_qp_mem(residual_size_on_qp * num_qp * num_el);
 
-      if (test_space_field_idx != -1)
+      // TODO: Replace with GetVSize?
+      if (test_space_field_idx != -1 && (dtqmaps[test_space_field_idx] != nullptr))
       {
+         // FieldDescriptor::Value, Gradient etc.
          residual_e.SetSize(dtqmaps[test_space_field_idx]->ndof * GetVDim(
                                fields[test_space_field_idx]) * num_el);
       }
+      else if (test_space_field_idx != -1) {
+          // FieldDescriptor::None
+          residual_e.SetSize(ir.GetNPoints() * GetVDim(fields[test_space_field_idx]) * num_el);
+      }
       else
       {
+         // FieldDescriptor::One
          residual_e.SetSize(num_el);
       }
 
@@ -1493,8 +1500,8 @@ public:
                   auto r_qp = Reshape(&residual_qp(0, qp, el), residual_size_on_qp);
                   if constexpr (std::is_same<ad_method, AD::Enzyme> {})
                   {
-                     f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
-                                                    directions_qp, qp);
+                     // f_qp = apply_qf_fwddiff_enzyme(qf.func, args, fields_qp, shadow_args,
+                     //                                directions_qp, qp);
                   }
                   else if constexpr (std::is_same<ad_method, AD::DualType> {})
                   {

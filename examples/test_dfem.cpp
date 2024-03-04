@@ -50,6 +50,9 @@ int test_interpolate_linear_scalar(std::string mesh_file,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"}
    },
+   {
+       {&f1_g, "primary_variable"}
+   },
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -138,6 +141,7 @@ int test_interpolate_gradient_scalar(std::string mesh_file,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"}
    },
+   {{&f1_g, "primary_variable"}},
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -231,6 +235,7 @@ int test_interpolate_linear_vector(std::string mesh_file, int refinements,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"}
    },
+   {{&f1_g, "primary_variable"}},
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -327,6 +332,7 @@ int test_interpolate_gradient_vector(std::string mesh_file,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"}
    },
+   {{&f1_g, "primary_variable"}},
    mesh);
 
    dop.AddElementOperator(mass, ir);
@@ -429,6 +435,7 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"}
    },
+   {},
    mesh);
 
    dop_pasetup.AddElementOperator(eop, ir);
@@ -462,6 +469,7 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
       {mesh.GetNodes(), "coordinates"},
       {&qf, "quadrature_data"},
    },
+   {{&u, "potential"}},
    mesh);
 
    dop_paapply.AddElementOperator(eo_apply, ir);
