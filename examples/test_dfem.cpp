@@ -51,11 +51,11 @@ int test_interpolate_linear_scalar(std::string mesh_file,
       {&qf, "quadrature_data"}
    },
    {
-       {&f1_g, "primary_variable"}
+      {&f1_g, "primary_variable"}
    },
    mesh);
 
-   dop.AddElementOperator(mass, ir);
+   dop.AddElementOperator<AD::None>(mass, ir);
 
    auto f1 = [](const Vector &coords)
    {
@@ -144,7 +144,7 @@ int test_interpolate_gradient_scalar(std::string mesh_file,
    {{&f1_g, "primary_variable"}},
    mesh);
 
-   dop.AddElementOperator(mass, ir);
+   dop.AddElementOperator<AD::None>(mass, ir);
 
    auto f1 = [](const Vector &coords)
    {
@@ -238,7 +238,7 @@ int test_interpolate_linear_vector(std::string mesh_file, int refinements,
    {{&f1_g, "primary_variable"}},
    mesh);
 
-   dop.AddElementOperator(mass, ir);
+   dop.AddElementOperator<AD::None>(mass, ir);
 
    auto f1 = [](const Vector &coords, Vector &u)
    {
@@ -335,7 +335,7 @@ int test_interpolate_gradient_vector(std::string mesh_file,
    {{&f1_g, "primary_variable"}},
    mesh);
 
-   dop.AddElementOperator(mass, ir);
+   dop.AddElementOperator<AD::None>(mass, ir);
 
    auto f1 = [](const Vector &coords, Vector &u)
    {
@@ -383,20 +383,30 @@ int test_interpolate_gradient_vector(std::string mesh_file,
    return 0;
 }
 
-int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
+int test_partial_assembly_setup_qf(std::string mesh_file, const int refinements,
                                    const int polynomial_order)
 {
+   constexpr int vdim = 1;
+   Mesh mesh_serial = Mesh(mesh_file, 1, 1);
+   for (int i = 0; i < refinements; i++)
+   {
+      mesh_serial.UniformRefinement();
+   }
+   ParMesh mesh(MPI_COMM_WORLD, mesh_serial);
+   mesh.SetCurvature(1);
    const int dim = mesh.Dimension();
+   mesh_serial.Clear();
+
    H1_FECollection h1fec(polynomial_order, dim);
    ParFiniteElementSpace h1fes(&mesh, &h1fec, vdim);
+
+   const IntegrationRule &ir =
+      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
    Array<int> ess_tdof_list;
    Array<int> ess_bdr(mesh.bdr_attributes.Max());
    ess_bdr = 1;
    h1fes.GetEssentialTrueDofs(ess_bdr, ess_tdof_list);
-
-   const IntegrationRule &ir =
-      IntRules.Get(h1fes.GetFE(0)->GetGeomType(), 2 * h1fec.GetOrder() + 1);
 
    QuadratureSpace qspace(mesh, ir);
    QuadratureFunction qf(&qspace, dim * dim);
@@ -411,8 +421,6 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    auto pa_setup = [](tensor<double, 2, 2> J, double w)
    {
       return inv(J) * transpose(inv(J)) * det(J) * w;
-      // out << J << "\n";
-      // return J;
    };
 
    ElementOperator eop
@@ -438,7 +446,7 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    {},
    mesh);
 
-   dop_pasetup.AddElementOperator(eop, ir);
+   dop_pasetup.AddElementOperator<AD::None>(eop, ir);
 
    out << "setup" << "\n";
    Vector zero;
@@ -472,39 +480,11 @@ int test_partial_assembly_setup_qf(ParMesh &mesh, const int vdim,
    {{&u, "potential"}},
    mesh);
 
-   dop_paapply.AddElementOperator(eo_apply, ir);
+   dop_paapply.AddElementOperator<AD::None>(eo_apply, ir);
 
    Vector y(u.Size());
    out << "apply" << "\n";
    dop_paapply.Mult(u, y);
-
-   // out << "gradient" << "\n";
-   // {
-   //    u = 1.0;
-   //    DenseMatrix J(u.Size());
-   //    auto &dop_grad = dop_paapply.GetGradient(u);
-
-   //    Vector y(u.Size());
-   //    u = 0.0;
-   //    std::ofstream ostrm("amat_dfem.dat");
-   //    for (size_t i = 0; i < u.Size(); i++)
-   //    {
-   //       u(i) = 1.0;
-   //       dop_grad.Mult(u, y);
-   //       J.SetRow(i, y);
-   //       u(i) = 0.0;
-   //    }
-   //    for (size_t i = 0; i < u.Size(); i++)
-   //    {
-   //       for (size_t j = 0; j < u.Size(); j++)
-   //       {
-   //          ostrm << J(i,j) << " ";
-   //       }
-   //       ostrm << "\n";
-   //    }
-   //    ostrm.close();
-   //    // exit(0);
-   // }
 
    return 0;
 }
@@ -529,18 +509,34 @@ int main(int argc, char *argv[])
    ret = test_interpolate_linear_scalar(mesh_file, refinements, polynomial_order);
    out << "test_interpolate_linear_scalar";
    ret ? out << " FAILURE\n" : out << " OK\n";
+
    ret = test_interpolate_gradient_scalar(mesh_file, refinements,
                                           polynomial_order);
    out << "test_interpolate_gradient_scalar";
    ret ? out << " FAILURE\n" : out << " OK\n";
+
    ret = test_interpolate_linear_vector(mesh_file, refinements, polynomial_order);
    out << "test_interpolate_linear_vector";
    ret ? out << " FAILURE\n" : out << " OK\n";
+
    ret = test_interpolate_gradient_vector(mesh_file,
                                           refinements,
                                           polynomial_order);
    out << "test_interpolate_gradient_vector";
    ret ? out << " FAILURE\n" : out << " OK\n";
+
+   ret = test_partial_assembly_setup_qf(mesh_file,
+                                        refinements,
+                                        polynomial_order);
+   out << "test_partial_assembly_setup_qf";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+
+   ret = test_partial_assembly_setup_qf(mesh_file,
+                                        refinements,
+                                        polynomial_order);
+   out << "test_partial_assembly_setup_qf";
+   ret ? out << " FAILURE\n" : out << " OK\n";
+
 
    return 0;
 }

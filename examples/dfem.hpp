@@ -1149,8 +1149,12 @@ public:
       // TODO: Currently this only supports one dependent variable. Could be used for second derivatives?
       //
       // This index is the field that the residual is differentiated wrt.
-      if ((dependent_field_idx = find_name_idx(fields,
-                                               dependent_fields[0].label)) != -1)
+      if (dependent_fields.empty())
+      {
+
+      }
+      else if ((dependent_field_idx = find_name_idx(fields,
+                                                    dependent_fields[0].label)) != -1)
       {
          out << "dependent input is field idx " << dependent_field_idx << " -> " <<
              fields[dependent_field_idx].label << "\n";
@@ -1291,9 +1295,11 @@ public:
          residual_e.SetSize(dtqmaps[test_space_field_idx]->ndof * GetVDim(
                                fields[test_space_field_idx]) * num_el);
       }
-      else if (test_space_field_idx != -1) {
-          // FieldDescriptor::None
-          residual_e.SetSize(ir.GetNPoints() * GetVDim(fields[test_space_field_idx]) * num_el);
+      else if (test_space_field_idx != -1)
+      {
+         // FieldDescriptor::None
+         residual_e.SetSize(ir.GetNPoints() * GetVDim(fields[test_space_field_idx]) *
+                            num_el);
       }
       else
       {
