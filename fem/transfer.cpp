@@ -471,7 +471,7 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
       }
       else
       {
-         std::cout<<"Operators pass! R_error = "<<R_error<<" P_error = "<<P_error<<std::endl;
+         mfem::out<<"Operators pass! \n R_error = "<<R_error<<" P_error = "<<P_error<<std::endl;
       }
    }
 }
@@ -569,7 +569,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          const auto d_D = Reshape(D.Write(), qPts, nref, nel_ho);
 
          MFEM_ASSERT(nel_ho*nref == nel_lor, "we expect nel_ho*nref == nel_lor");
-         std::cout<<"nel_ho = "<<nel_ho<<" nel_ho*nref  "<<nel_ho*nref<<" "<<nel_lor<<std::endl;
+         mfem::out<<"nel_ho = "<<nel_ho<<" nel_ho*nref  "<<nel_ho*nref<<" "<<nel_lor<<std::endl;
 
          //*********************************
          // Setup data at quadrature points
@@ -807,7 +807,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                   {
                      dot += v_R_ea(t, iref, iho, e) * v_M_ea_lor(t, jlo, lor_idx);
                   }
-                  const int lo_ref_idx = jlo + ndof_lor * iref;
 
                   v_RtM_L(iho, jlo, iref, e) = dot;
 
@@ -1058,7 +1057,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
          {
             for (int j=0; j<ndof_lor; ++j)
             {
-               const int id = j + i*ndof_lor;
                dot += v_R_ea(j, i, k, iho) * v_x(j, i, iho);
             }
 
