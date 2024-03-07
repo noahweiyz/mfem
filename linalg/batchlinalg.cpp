@@ -12,14 +12,31 @@
 
 // Implementation of batchlinalg class
 
-
-#include "../general/forall.hpp"
 #include "batchlinalg.hpp"
 
 #if defined(MFEM_USE_UMPIRE)
 #define MFEM_RELEASE_MEM(o) o.GetMemory().DeleteDevice(false)
 #else
 #define MFEM_RELEASE_MEM(o)
+#endif
+
+#if defined(MFEM_USE_CUDA)
+#include <cusolverDn.h>
+
+#define MFEM_cu_or_hip(stub) cu##stub
+#define MFEM_Cu_or_Hip(stub) Cu##stub
+#define MFEM_CU_or_HIP(stub) CU##stub
+#define MFEM_CUDA_or_HIP(stub) CUDA##stub
+#endif
+
+#if defined(MFEM_USE_HIP)
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
+
+#define MFEM_cu_or_hip(stub) hip##stub
+#define MFEM_Cu_or_Hip(stub) Hip##stub
+#define MFEM_CU_or_HIP(stub) HIP##stub
+#define MFEM_CUDA_or_HIP(stub) HIP##stub
 #endif
 
 namespace mfem
