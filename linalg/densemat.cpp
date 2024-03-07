@@ -4575,4 +4575,86 @@ void BatchInverseMatrix(const mfem::Vector &LU,
    });
 }
 
+void BatchInverseMatrix(const DenseTensor &LU,
+                        const Array<int> &P,
+                        DenseTensor &INV)
+{
+   const int m = LU.SizeI();
+   const int NE = LU.SizeK();
+   auto data_all = mfem::Reshape(LU.Read(), m, m, NE);
+   auto piv_all  = mfem::Reshape(P.Read(), m, NE);
+   auto inv_all  = mfem::Reshape(INV.ReadWrite(), m, m, NE);
+
+
+   mfem::forall(NE, [=] MFEM_HOST_DEVICE (int e)
+   {
+      // A^{-1} = U^{-1} L^{-1} P
+      // X <- U^{-1} (set only the upper triangular part of X)
+      double *X          = &inv_all(0, 0, e);
+      double *x          = X;
+      const double *data = &data_all(0, 0, e);
+      const int *ipiv    = &piv_all(0, e);
+
+      for (int k = 0; k < m; k++)
+      {
+         const double minus_x_k = -(x[k] = 1.0 / data[k + k * m]);
+         for (int i = 0; i < k; i++)
+         {
+            x[i] = data[i + k * m] * minus_x_k;
+         }
+         for (int j = k - 1; j >= 0; j--)
+         {
+            const double x_j = (x[j] /= data[j + j * m]);
+            for (int i = 0; i < j; i++)
+            {
+               x[i] -= data[i + j * m] * x_j;
+            }
+         }
+         x += m;
+      }
+
+      // X <- X L^{-1} (use input only from the upper triangular part of X)
+      {
+         int k = m - 1;
+         for (int j = 0; j < k; j++)
+         {
+            const double minus_L_kj = -data[k + j * m];
+            for (int i = 0; i <= j; i++)
+            {
+               X[i + j * m] += X[i + k * m] * minus_L_kj;
+            }
+            for (int i = j + 1; i < m; i++)
+            {
+               X[i + j * m] = X[i + k * m] * minus_L_kj;
+            }
+         }
+      }
+      for (int k = m - 2; k >= 0; k--)
+      {
+         for (int j = 0; j < k; j++)
+         {
+            const double L_kj = data[k + j * m];
+            for (int i = 0; i < m; i++)
+            {
+               X[i + j * m] -= X[i + k * m] * L_kj;
+            }
+         }
+      }
+
+      // X <- X P
+      for (int k = m - 1; k >= 0; k--)
+      {
+         const int piv_k = ipiv[k];
+         if (k != piv_k)
+         {
+            for (int i = 0; i < m; i++)
+            {
+               //Swap<double>(X[i+k*m], X[i+piv_k*m]);
+               mfem::kernels::internal::Swap<double>(X[i + k * m], X[i + piv_k * m]);
+            }
+         }
+      }
+   });
+}
+
 } // namespace mfem

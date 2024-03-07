@@ -708,7 +708,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                   double dot = 0.0;
                   for (int qi=0; qi<qPts; ++qi)
                   {
-                    dot += d_B_L(qi, bl, iref) *  d_D(qi, iref, iho) * d_B_H(qi, bh, iref);
+                     dot += d_B_L(qi, bl, iref) *  d_D(qi, iref, iho) * d_B_H(qi, bh, iref);
                   }
 
                   //column major storange
@@ -846,8 +846,9 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       RtM_LR_LU = RtM_LR;
       //P = 0;
       int *d_P = P.Write();
-      mfem::forall(P.Size(), [=] MFEM_HOST_DEVICE (int idx) {
-          d_P[idx] = 0;
+      mfem::forall(P.Size(), [=] MFEM_HOST_DEVICE (int idx)
+      {
+         d_P[idx] = 0;
       });
 
       Vector InvRtM_LR_LU(RtM_LR.Size());

@@ -1290,11 +1290,15 @@ void BatchLUFactor(const int m, const int len,
 void BatchLUSolve(mfem::Vector &Minv, int m, int NE, mfem::Array<int> &P,
                   mfem::Vector &X);
 
-void BatchInverseMatrix(const mfem::Vector &LU,
+void BatchInverseMatrix(const Vector &LU,
                         const int m,
                         const int NE,
-                        const mfem::Array<int> &P,
-                        mfem::Vector &INV);
+                        const Array<int> &P,
+                        Vector &INV);
+
+void BatchInverseMatrix(const DenseTensor &LU,
+                        const Array<int> &P,
+                        DenseTensor &INV);
 
 // Inline methods
 
