@@ -574,7 +574,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          //*********************************
          // Setup data at quadrature points
          //*********************************
-         //for (int iho=0; iho<nel_ho; ++iho)
          mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
          {
             for (int iref = 0; iref < nref; ++iref)
@@ -599,41 +598,11 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          emb_tr.SetIdentityTransformation(geom);
          const DenseTensor &pmats = cf_tr.point_matrices[geom];
 
-         /*
-         DenseMatrix R_iho(&R[offsets[iho]], ndof_lor*nref, ndof_ho);
-
-         DenseMatrix Minv_lor(ndof_lor*nref, ndof_lor*nref);
-         DenseMatrix M_mixed(ndof_lor*nref, ndof_ho);
-
-         MassIntegrator mi;
-         DenseMatrix M_lor_el(ndof_lor, ndof_lor);
-         DenseMatrixInverse Minv_lor_el(&M_lor_el);
-         DenseMatrix M_lor(ndof_lor*nref, ndof_lor*nref);
-         DenseMatrix M_mixed_el(ndof_lor, ndof_ho);
-
-         Minv_lor = 0.0;
-         M_lor = 0.0;
-
-         DenseMatrix RtMlor(ndof_ho, ndof_lor*nref);
-         DenseMatrix RtMlorR(ndof_ho, ndof_ho);
-         DenseMatrixInverse RtMlorR_inv(&RtMlorR);
-         */
-
          //Collect the basis functions
          for (int iref = 0; iref < nref; ++iref)
          {
 
             int ilor = lor_els[iref];
-            /*
-             // Assemble the low-order refined mass matrix and invert locally
-             ElementTransformation *el_tr = fes_lor.GetElementTransformation(ilor);
-             mi.AssembleElementMatrix(fe_lor, *el_tr, M_lor_el);
-             M_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
-             Minv_lor_el.Factor();
-             Minv_lor_el.GetInverseMatrix(M_lor_el);
-             // Insert into the diagonal of the patch LOR mass matrix
-             Minv_lor.CopyMN(M_lor_el, iref*ndof_lor, iref*ndof_lor);
-            */
 
             // Now assemble the block-row of the mixed mass matrix associated
             // with integrating HO functions against LOR functions on the LOR
@@ -693,7 +662,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       auto d_B_H = mfem::Reshape(B_H.Read(), qPts, fe_ho_ndof, nref);
       auto d_D   = mfem::Reshape(D.Read(), qPts, nref, nel_ho);
 
-      //for (int iho=0; iho<nel_ho; ++iho)
       mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
       {
 
@@ -752,7 +720,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    MFEM_VERIFY(nel_lor==nel_ho*nref, "nel_lor != nel_ho*nref");
 
    // (ndofs_lor x ndofs_lor) x (ndofs_lor x ndof_ho)
-   //for (int iho = 0; iho<nel_ho; ++iho)
    mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int j=0; j<ndof_ho; ++j)
@@ -820,7 +787,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       mfem::Vector RtM_LR(ndof_ho * ndof_ho * nel_ho);
       auto v_RtM_LR = mfem::Reshape(RtM_LR.Write(), ndof_ho, ndof_ho, nel_ho);
 
-      //for (int e=0; e<nel_ho; ++e)
       mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
          for (int iho=0; iho<ndof_ho; ++iho)
@@ -861,7 +827,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
                                           nel_ho);
       auto v_P_ea = mfem::Reshape(P_ea.Write(), ndof_ho, ndof_lor, nref, nel_ho);
 
-      //for (int e=0; e<nel_ho; ++e)
       mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
          for (int iho=0; iho<ndof_ho; ++iho)
@@ -955,7 +920,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMult(
    auto v_x    = mfem::Reshape(x.Read(), ndof_ho, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_lor, nref, nel_ho);
 
-   //for (int iho = 0; iho < nel_ho; ++iho)
    mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int i=0; i<nref; ++i)
@@ -1046,7 +1010,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceMultTranspose(
    auto v_x    = mfem::Reshape(x.Read(), ndof_lor, nref, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_ho, nel_ho);
 
-   //for (int iho = 0; iho < nel_ho; ++iho)
    mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
    {
       for (int k=0; k<ndof_ho; ++k)
@@ -1139,7 +1102,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceProlongate(
    auto v_x    = mfem::Reshape(x.Read(), ndof_lor, nref, nel_ho);
    auto v_y    = mfem::Reshape(y.Write(), ndof_ho, nel_ho);
 
-   //for (int e = 0; e < nel_ho; ++e)
    mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
    {
       for (int iho=0; iho<ndof_ho; ++iho)
