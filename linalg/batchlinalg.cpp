@@ -13,6 +13,7 @@
 // Implementation of batchlinalg class
 
 #include "batchlinalg.hpp"
+#include "../general/forall.hpp"
 
 #if defined(MFEM_USE_UMPIRE)
 #define MFEM_RELEASE_MEM(o) o.GetMemory().DeleteDevice(false)
