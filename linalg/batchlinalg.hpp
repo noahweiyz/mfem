@@ -14,7 +14,6 @@
 
 #include "../config/config.hpp"
 #include "../general/globals.hpp"
-#include "../general/forall.hpp"
 #include "matrix.hpp"
 #include "densemat.hpp"
 
