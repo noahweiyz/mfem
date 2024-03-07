@@ -735,14 +735,17 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
    const bool add = false;
    mi.AssembleEA(fes_lor, M_ea_lor, add);
 
-   Vector MLU_ea_lor(M_ea_lor);
-   Vector Minv_ear_lor(M_ea_lor.Size());
+   DenseTensor MLU_ea_lor(ndof_lor, ndof_lor, nel_lor);
+
+   LibBatchSolver batchSolver(LibBatchSolver::SolveMode::INVERSE);
+   batchSolver.AssignMatrices(M_ea_lor, ndof_lor, nel_lor);
+
+   DenseTensor Minv_ear_lor(ndof_lor, ndof_lor, nel_lor);
+   batchSolver.GetInverse(Minv_ear_lor);
 
    //compute batch inverse of M_ea_lor;
-   mfem::Array<int> P;
+   //mfem::Array<int> P;
 
-   BatchLUFactor(ndof_lor, nel_lor, MLU_ea_lor, P);
-   BatchInverseMatrix(MLU_ea_lor, ndof_lor, nel_lor, P, Minv_ear_lor);
 
    //Recall mfem is column major
    // ndof_lor x ndof_ho
@@ -844,20 +847,22 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
          }
       });
 
+      /*
       Vector RtM_LR_LU(RtM_LR.Size());
       RtM_LR_LU.UseDevice(true);
       RtM_LR_LU = RtM_LR;
-
-      int *d_P = P.Write();
-      mfem::forall(P.Size(), [=] MFEM_HOST_DEVICE (int idx)
-      {
-         d_P[idx] = 0;
-      });
-
       Vector InvRtM_LR_LU(RtM_LR.Size());
-
+      Array<int> P;
       BatchLUFactor(ndof_ho, nel_ho, RtM_LR_LU, P);
       BatchInverseMatrix(RtM_LR_LU, ndof_ho, nel_ho, P, InvRtM_LR_LU);
+      */
+
+      //LibBatchSolver second_batchSolver(LibBatchSolver::SolveMode::INVERSE);
+      //recycle batch solver from above
+      batchSolver.AssignMatrices(RtM_LR, ndof_ho, nel_ho);
+
+      DenseTensor InvRtM_LR_LU(ndof_ho, ndof_ho, nel_ho);
+      batchSolver.GetInverse(InvRtM_LR_LU);
 
 
       //Form P_ea

@@ -106,8 +106,8 @@ void LibBatchSolver::GetInverse(mfem::DenseTensor &InvMatBatch) const
    // use existing inverse
    if (mode_ == SolveMode::INVERSE)
    {
-      MFEM_VERIFY(InvMatrixBatch_.TotalSize() != InvMatBatch.TotalSize(),
-                  "internal error, InvMatrixBatch_.TotalSize() != InvMatBatch.TotalSize()");
+      MFEM_VERIFY(InvMatrixBatch_.TotalSize() == InvMatBatch.TotalSize(),
+                  "Internal error, InvMatrixBatch_.TotalSize() != InvMatBatch.TotalSize()");
 
       const double *d_M_inv = InvMatrixBatch_.Read();
       double *d_out         = InvMatBatch.Write();
