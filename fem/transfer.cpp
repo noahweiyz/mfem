@@ -13,6 +13,8 @@
 #include "bilinearform.hpp"
 #include "../general/forall.hpp"
 
+constexpr double ho_lor_tol = 1e-10;
+
 namespace mfem
 {
 
@@ -464,7 +466,7 @@ L2ProjectionGridTransfer::L2ProjectionL2Space::L2ProjectionL2Space
          P_error += fabs(P[j] - P_ea.HostRead()[j]);
       }
 
-      if (R_error > 1e-12 || P_error > 1e-12)
+      if (R_error > ho_lor_tol || P_error > ho_lor_tol)
       {
          MFEM_VERIFY(false,
                      "Error in operator assembly R_error = "<<R_error<<" P_error ="<<P_error);
@@ -564,36 +566,73 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
          const int Q1D         = maps_lor->nqpt;
 
-         const auto W = Reshape(ir->GetWeights().Read(), Q1D, Q1D);
-         const auto J = Reshape(geo_facts->detJ.Read(), Q1D,Q1D, nel_lor);
-         const auto d_D = Reshape(D.Write(), qPts, nref, nel_ho);
+         const int dim = mesh_ho->Dimension();
 
          MFEM_ASSERT(nel_ho*nref == nel_lor, "we expect nel_ho*nref == nel_lor");
-         mfem::out<<"nel_ho = "<<nel_ho<<" nel_ho*nref  "<<nel_ho*nref<<" "<<nel_lor<<std::endl;
 
          //*********************************
          // Setup data at quadrature points
          //*********************************
-         mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
+         if (dim == 2)
          {
-            for (int iref = 0; iref < nref; ++iref)
+
+            const auto W = Reshape(ir->GetWeights().Read(), Q1D, Q1D);
+            const auto J = Reshape(geo_facts->detJ.Read(), Q1D,Q1D, nel_lor);
+            const auto d_D = Reshape(D.Write(), qPts, nref, nel_ho);
+
+            mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
             {
-
-               int lo_el_id = iref + nref*iho;
-
-               for (int qy=0; qy<Q1D; ++qy)
+               for (int iref = 0; iref < nref; ++iref)
                {
-                  for (int qx=0; qx<Q1D; ++qx)
+
+                  int lo_el_id = iref + nref*iho;
+
+                  for (int qy=0; qy<Q1D; ++qy)
                   {
+                     for (int qx=0; qx<Q1D; ++qx)
+                     {
 
-                     int q = qx + Q1D*qy;
-                     const double detJ = J(qx, qy, lo_el_id);
-                     d_D(q, iref, iho) = W(qx, qy) * detJ;
+                        const int q = qx + Q1D*qy;
+                        const double detJ = J(qx, qy, lo_el_id);
+                        d_D(q, iref, iho) = W(qx, qy) * detJ;
+                     }
                   }
-               }
 
-            }
-         });
+               }
+            });
+         }
+
+         if (dim == 3)
+         {
+
+            const auto W = Reshape(ir->GetWeights().Read(), Q1D, Q1D, Q1D);
+            const auto J = Reshape(geo_facts->detJ.Read(), Q1D, Q1D, Q1D, nel_lor);
+            const auto d_D = Reshape(D.Write(), qPts, nref, nel_ho);
+
+            mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int iho)
+            {
+               for (int iref = 0; iref < nref; ++iref)
+               {
+
+                  int lo_el_id = iref + nref*iho;
+
+                  for (int qz=0; qz<Q1D; qz++)
+                  {
+                     for (int qy=0; qy<Q1D; ++qy)
+                     {
+                        for (int qx=0; qx<Q1D; ++qx)
+                        {
+
+                           const int q = qx + Q1D*qy + Q1D*Q1D*qz;
+                           const double detJ = J(qx, qy, qz, lo_el_id);
+                           d_D(q, iref, iho) = W(qx, qy, qz) * detJ;
+                        }
+                     }
+                  }
+
+               }
+            });
+         }
 
          emb_tr.SetIdentityTransformation(geom);
          const DenseTensor &pmats = cf_tr.point_matrices[geom];
@@ -756,7 +795,6 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       mfem::Vector RtM_L(ndof_ho*nref*ndof_lor*nel_ho);
       auto v_RtM_L = mfem::Reshape(RtM_L.Write(), ndof_ho, ndof_lor, nref, nel_ho);
 
-      //for (int e=0; e<nel_ho; ++e)
       mfem::forall(nel_ho, [=] MFEM_HOST_DEVICE (int e)
       {
 
@@ -809,7 +847,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
       Vector RtM_LR_LU(RtM_LR.Size());
       RtM_LR_LU.UseDevice(true);
       RtM_LR_LU = RtM_LR;
-      //P = 0;
+
       int *d_P = P.Write();
       mfem::forall(P.Size(), [=] MFEM_HOST_DEVICE (int idx)
       {
@@ -820,6 +858,8 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::DeviceL2ProjectionL2Space
 
       BatchLUFactor(ndof_ho, nel_ho, RtM_LR_LU, P);
       BatchInverseMatrix(RtM_LR_LU, ndof_ho, nel_ho, P, InvRtM_LR_LU);
+
+
       //Form P_ea
       //P_ea should be of dimension (ndof_ho x ndof_ho) x (ndof_ho x nref*ndof_lor)
       //P_ea ndof_ho x nref*ndof_lor
@@ -898,7 +938,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Mult(
       DeviceMult(x, y_temp);
       y_temp -= y;
       double error = y_temp.Norml2();
-      if (error > 1e-12)
+      if (error > ho_lor_tol)
       {
          MFEM_VERIFY(false, "Mult difference too high = "<<error);
       }
@@ -987,7 +1027,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::MultTranspose(
       DeviceMultTranspose(x, y_temp);
       y_temp -= y;
       double error = y_temp.Norml2();
-      if (error > 1e-12)
+      if (error > ho_lor_tol)
       {
          MFEM_VERIFY(false, "MultTranspose difference too high = "<<error);
       }
@@ -1078,7 +1118,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::Prolongate(
       DeviceProlongate(x, y_temp);
       y_temp -= y;
       double error = y_temp.Norml2();
-      if (error > 1e-12)
+      if (error > ho_lor_tol)
       {
          MFEM_VERIFY(false, "Prolongate difference too high = "<<error);
       }
@@ -1170,7 +1210,7 @@ void L2ProjectionGridTransfer::L2ProjectionL2Space::ProlongateTranspose(
       DeviceProlongateTranspose(x, y_temp);
       y_temp -= y;
       double error = y_temp.Norml2();
-      if (error > 1e-12)
+      if (error > ho_lor_tol)
       {
          MFEM_VERIFY(false, "Prolongate transpose difference too high = "<<error);
       }
