@@ -1,4 +1,4 @@
-// Copyright (c) 2010-2023, Lawrence Livermore National Security, LLC. Produced
+// Copyright (c) 2010-2024, Lawrence Livermore National Security, LLC. Produced
 // at the Lawrence Livermore National Laboratory. All Rights reserved. See files
 // LICENSE and NOTICE for details. LLNL-CODE-806117.
 //
@@ -19,9 +19,7 @@
 #include "../general/globals.hpp"
 #include "../general/mem_manager.hpp"
 #include "../general/device.hpp"
-#ifdef MFEM_USE_SUNDIALS
-#include <nvector/nvector_serial.h>
-#endif
+
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -322,6 +320,9 @@ public:
 
    /// (*this) = -(*this)
    void Neg();
+
+   /// (*this)(i) = 1.0 / (*this)(i)
+   void Reciprocal();
 
    /// Swap the contents of two Vectors
    inline void Swap(Vector &other);

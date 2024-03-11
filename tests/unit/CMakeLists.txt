@@ -1,4 +1,4 @@
-# Copyright (c) 2010-2023, Lawrence Livermore National Security, LLC. Produced
+# Copyright (c) 2010-2024, Lawrence Livermore National Security, LLC. Produced
 # at the Lawrence Livermore National Laboratory. All Rights reserved. See files
 # LICENSE and NOTICE for details. LLNL-CODE-806117.
 #
@@ -18,6 +18,7 @@ include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR})
 #    for d in general linalg mesh fem enzyme; do ls -1 $d/*.cpp; done
 set(UNIT_TESTS_SRCS
   general/test_array.cpp
+  general/test_error.cpp
   general/test_mem.cpp
   general/test_text.cpp
   general/test_umpire_mem.cpp
@@ -29,6 +30,7 @@ set(UNIT_TESTS_SRCS
   linalg/test_constrainedsolver.cpp
   linalg/test_direct_solvers.cpp
   linalg/test_hypre_ilu.cpp
+  linalg/test_hypre_prec.cpp
   linalg/test_hypre_vector.cpp
   linalg/test_ilu.cpp
   linalg/test_matrix_block.cpp
@@ -41,6 +43,8 @@ set(UNIT_TESTS_SRCS
   linalg/test_ode2.cpp
   linalg/test_operator.cpp
   linalg/test_vector.cpp
+  mesh/test_face_orientations.cpp
+  mesh/mesh_test_utils.cpp
   mesh/test_fms.cpp
   mesh/test_mesh.cpp
   mesh/test_ncmesh.cpp
@@ -93,6 +97,7 @@ set(UNIT_TESTS_SRCS
   fem/test_pa_grad.cpp
   fem/test_pa_idinterp.cpp
   fem/test_pa_kernels.cpp
+  fem/test_pgridfunc_save_serial.cpp
   fem/test_project_bdr.cpp
   fem/test_quadf_coef.cpp
   fem/test_quadinterpolator.cpp
