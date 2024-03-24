@@ -112,6 +112,11 @@ int main(int argc, char *argv[])
    args.AddOption(&vis_steps, "-vs", "--visualization-steps",
                   "Visualize every n-th timestep.");
    args.ParseCheck();
+   // set penalty constant if not provided.
+   if (kappa < 0)
+   {
+      kappa = (order+1)*(order+1);
+   }
 
    // 2. Read the mesh from the given mesh file. When the user does not provide
    //    mesh file, use the default mesh file for the problem.
