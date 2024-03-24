@@ -116,6 +116,51 @@ public:
                           Vector &fluxN) const override;
 };
 
+/// The 2nd order AdamsBashforth Method
+class AdamsBashforth : public ODESolver
+{
+private:
+   Vector N_1, N_2, z, x_1, x_2;
+
+public:
+
+   void PreviousStep(Vector &pre_x);
+
+   void Init(TimeDependentOperator &f_) override;
+
+   void Step(Vector &x, double &t, double &dt) override;
+};
+
+void AdamsBashforth::Init(TimeDependentOperator &f_)
+{
+   ODESolver::Init(f_);
+   int n = f->Width();
+   N_1.SetSize(n, mem_type);
+   N_2.SetSize(n, mem_type);
+   z.SetSize(n, mem_type);
+   x_1.SetSize(n, mem_type);
+   x_2.SetSize(n, mem_type);
+}
+
+void AdamsBashforth::PreviousStep(Vector &pre_x)
+{
+   x_2=pre_x;
+}
+
+void AdamsBashforth::Step(Vector &x, double &t, double &dt)
+{
+   x_1=x;
+   f->SetTime(t);
+   f->Mult(x_1, N_1);
+   f->Mult(x_2, N_2);
+   x_1.operator*=(4.0/3.0);
+   add(x_1,4.0/3.0*dt,N_1,z);
+   z.Add(-1.0/3.0,x_2);
+   z.Add(-2.0/3.0*dt,N_2);
+   x=z;
+   t += dt;
+}
+
 //////////////////////////////////////////////////////////////////
 ///        HYPERBOLIC CONSERVATION LAWS IMPLEMENTATION         ///
 //////////////////////////////////////////////////////////////////

@@ -143,9 +143,9 @@ int main(int argc, char *argv[])
    // 3. Define the ODE solver used for time integration. Several explicit
    //    Runge-Kutta methods are available.
    ODESolver *ode_solver_0 = NULL;
-   ODESolver *ode_solver = NULL;
+   AdamsBashforth *ode_solver = NULL;
    ode_solver_0 = new ForwardEulerSolver;
-   ode_solver = new RK4Solver;
+   ode_solver = new AdamsBashforth;
    
 
    // 4. Define the discontinuous DG finite element space of the given
@@ -169,6 +169,8 @@ int main(int argc, char *argv[])
                                                         specific_heat_ratio,
                                                         gas_constant);
    GridFunction mom(&dfes);
+   GridFunction mom_1(&dfes);
+   GridFunction mom_2(&dfes);
    GridFunction p(&fes);
    GridFunction p_grad(&dfes);
    mom.ProjectCoefficient(u0);
@@ -204,11 +206,16 @@ int main(int argc, char *argv[])
 
 
    // Define pressuer pressure_rhs
-   const double gamma=1.0;
-   LinearForm *b = new LinearForm(&fes);
+   const double gamma_0=1.0;
+   LinearForm *b_0 = new LinearForm(&fes);
    DivergenceGridFunctionCoefficient divu(&mom);
-   ConstantCoefficient m(-gamma/dt);
+   ConstantCoefficient m(-gamma_0/dt);
    ProductCoefficient pressure_rhs(m,divu);
+   b_0->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
+
+   // Define pressuer pressure_rhs
+   const double gamma=1.5;
+   LinearForm *b = new LinearForm(&fes);
    b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
 
    GradientGridFunctionCoefficient grad_p(&p);
@@ -279,7 +286,7 @@ int main(int argc, char *argv[])
       euler.Mult(mom, z);
 
       double max_char_speed = euler.GetMaxCharSpeed();
-      dt = cfl * hmin / max_char_speed / (2 * order + 1);
+      dt = cfl * hmin / max_char_speed / (2 * order + 1)/2;
    }
 
    // Start the timer.
@@ -297,36 +304,57 @@ int main(int argc, char *argv[])
    for (int ti = 0; !done;)
    {
       double dt_real = min(dt, t_final - t);
-      // advection step
 
       if (ti == 0){
+         mom_1=mom;
+
+         // advection step
          ode_solver_0 ->Step(mom, t, dt_real);
+         /////////////////////////////////////////////////////////////////////////////
+         // pressure projection
+         b_0->Assemble();
+         a->Update();
+         a->Assemble();
+         a->Finalize();
+         const SparseMatrix &A = a->SpMat();
+         prec.SetOperator(A);
+         PCG(A, prec, *b_0, p, 1, 500, 1e-12, 0.0);
+         p -= M.InnerProduct(p, one_gf);
+
+         // Finalize solution
+         // Get u^n+1
+         mom.Add(-dt,p_grad);
+
+         mom_2=mom;
+         
       }
       else {
+         // advection step
+         ode_solver ->PreviousStep(mom_1);
          ode_solver ->Step(mom, t, dt_real);
+         /////////////////////////////////////////////////////////////////////////////
+         // pressure projection
+         b->Assemble();
+         a->Update();
+         a->Assemble();
+         a->Finalize();
+         const SparseMatrix &A = a->SpMat();
+         prec.SetOperator(A);
+         PCG(A, prec, *b, p, 1, 500, 1e-12, 0.0);
+         p -= M.InnerProduct(p, one_gf);
+         
+         // Finalize solution
+         // Get u^n+1
+         
+         mom.Add(-dt/gamma,p_grad);
+         mom_1=mom_2;
+         mom_2=mom;
       }
-      
-
-      /////////////////////////////////////////////////////////////////////////////
-      // pressure projection
-      b->Assemble();
-      a->Update();
-      a->Assemble();
-      a->Finalize();
-      const SparseMatrix &A = a->SpMat();
-      prec.SetOperator(A);
-      PCG(A, prec, *b, p, 1, 500, 1e-12, 0.0);
-
-      // Finalize solution
-      // Get u^n+1
-
-      mom.Add(-dt/gamma,p_grad);
-
 
       if (cfl > 0) // update time step size with CFL
       {
          double max_char_speed = euler.GetMaxCharSpeed();
-         dt = cfl * hmin / max_char_speed / (2 * order + 1);
+         dt = cfl * hmin / max_char_speed / (2 * order + 1)/2;
       }
       ti++;
 
@@ -372,6 +400,7 @@ int main(int argc, char *argv[])
    // Free the used memory.
    delete ode_solver;
    delete b;
+   delete b_0;
    delete a;
 
    return 0;
