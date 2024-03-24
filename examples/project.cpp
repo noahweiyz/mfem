@@ -204,20 +204,11 @@ int main(int argc, char *argv[])
          new HyperbolicFormIntegrator(numericalFlux, IntOrderOffset)),
       preassembleWeakDiv);
 
-
    // Define pressuer pressure_rhs
-   const double gamma_0=1.0;
-   LinearForm *b_0 = new LinearForm(&fes);
-   DivergenceGridFunctionCoefficient divu(&mom);
-   ConstantCoefficient m_0(-gamma_0/dt);
-   ProductCoefficient pressure_rhs_0(m_0,divu);
-   b_0->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs_0));
-
-   // Define pressuer pressure_rhs
-   const double gamma=1.5;
    LinearForm *b = new LinearForm(&fes);
-   ConstantCoefficient m(-gamma/dt);
-   ProductCoefficient pressure_rhs(m,divu);
+   DivergenceGridFunctionCoefficient divu(&mom);
+   ConstantCoefficient gamma_dt(-1.0/dt);
+   ProductCoefficient pressure_rhs(gamma_dt,divu);
    b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
 
    GradientGridFunctionCoefficient grad_p(&p);
@@ -298,69 +289,44 @@ int main(int argc, char *argv[])
 
    // Init time integration
    double t = 0.0;
-   euler.SetTime(t);
    ode_solver->Init(euler);
-   ode_solver_0->Init(euler);
 
    // Integrate in time.
    bool done = false;
    for (int ti = 0; !done;)
    {
       double dt_real = min(dt, t_final - t);
-
-      if (ti == 0){
-         mom_1=mom;
-
-         // advection step
-         ode_solver_0 ->Step(mom, t, dt_real);
-         /////////////////////////////////////////////////////////////////////////////
-         // pressure projection
-         b_0->Update();
-         b_0->Assemble();
-         a->Update();
-         a->Assemble();
-         a->Finalize();
-         const SparseMatrix &A = a->SpMat();
-         prec.SetOperator(A);
-         prec2.SetSolver(prec);
-         prec2.SetOperator(A);
-         prec2.Mult(*b_0,p);
-         PCG(A, prec2, *b_0, p, 1, 500, 1e-12, 0.0);
-         p -= M.InnerProduct(p, one_gf);
-
-         // Finalize solution
-         // Get u^n+1
-         mom.Add(-dt,p_grad);
-
-         mom_2=mom;
-         
-      }
-      else {
-         // advection step
-         ode_solver ->PreviousStep(mom_1);
-         ode_solver ->Step(mom, t, dt_real);
-         /////////////////////////////////////////////////////////////////////////////
-         // pressure projection
-         b->Update();
-         b->Assemble();
-         a->Update();
-         a->Assemble();
-         a->Finalize();
-         const SparseMatrix &A = a->SpMat();
-         prec.SetOperator(A);
-         prec2.SetSolver(prec);
-         prec2.SetOperator(A);
-         prec2.Mult(*b,p);
-         PCG(A, prec2, *b, p, 1, 500, 1e-12, 0.0);
-         p -= M.InnerProduct(p, one_gf);
-         
-         // Finalize solution
-         // Get u^n+1
-         
-         mom.Add(-dt/gamma,p_grad);
-         mom_1=mom_2;
-         mom_2=mom;
-      }
+        // advection step
+        if (ti == 0) // use euler
+        {
+            gamma_dt.constant = -1.0 / dt_real;
+            ode_solver->UseEuler(true);
+        }
+        else
+        {
+            gamma_dt.constant = -1.5 / dt_real;
+            ode_solver->UseEuler(false);
+        }
+        ode_solver ->Step(mom, t, dt_real);
+        /////////////////////////////////////////////////////////////////////////////
+        // pressure projection
+        b->Update();
+        b->Assemble();
+        a->Update();
+        a->Assemble();
+        a->Finalize();
+        const SparseMatrix &A = a->SpMat();
+        prec.SetOperator(A);
+        prec2.SetSolver(prec);
+        prec2.SetOperator(A);
+        prec2.Mult(*b,p);
+        PCG(A, prec2, *b, p, 1, 500, 1e-12, 0.0);
+        p -= M.InnerProduct(p, one_gf);
+        
+        // Finalize solution
+        // Get u^n+1
+        mom.Add(1.0 / gamma_dt.constant, p_grad);
+        
 
       if (cfl > 0) // update time step size with CFL
       {
@@ -411,7 +377,6 @@ int main(int argc, char *argv[])
    // Free the used memory.
    delete ode_solver;
    delete b;
-   delete b_0;
    delete a;
 
    return 0;

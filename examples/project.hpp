@@ -120,13 +120,39 @@ public:
 class AdamsBashforth : public ODESolver
 {
 private:
-   Vector N_1, N_2, z, x_1, x_2;
+bool using_euler;
+   Vector z, x_old;
+   double gamma0, alpha0, alpha1, beta0, beta1;
 
 public:
 
-   void PreviousStep(Vector &pre_x);
-
    void Init(TimeDependentOperator &f_) override;
+
+   void UseEuler(bool use = true)
+   {
+     if (use)
+     {
+        // next
+        gamma0 = 1.0;
+        // current
+        alpha0 = 1.0;
+        beta0 = 1.0;
+        // previous
+        alpha1 = 0.0;
+        beta1 = 0.0;
+     }
+     else
+     {
+        // next
+        gamma0 = 3.0 / 2.0;
+        // current
+        alpha0 = 2.0;
+        beta0 = 2.0;
+        // previous
+        alpha1 = -0.5;
+        beta1 = -1.0;
+     }
+   }
 
    void Step(Vector &x, double &t, double &dt) override;
 };
@@ -135,29 +161,22 @@ void AdamsBashforth::Init(TimeDependentOperator &f_)
 {
    ODESolver::Init(f_);
    int n = f->Width();
-   N_1.SetSize(n, mem_type);
-   N_2.SetSize(n, mem_type);
    z.SetSize(n, mem_type);
-   x_1.SetSize(n, mem_type);
-   x_2.SetSize(n, mem_type);
-}
-
-void AdamsBashforth::PreviousStep(Vector &pre_x)
-{
-   x_2=pre_x;
+   x_old.SetSize(n, mem_type);
 }
 
 void AdamsBashforth::Step(Vector &x, double &t, double &dt)
 {
-   x_1=x;
    f->SetTime(t);
-   f->Mult(x_1, N_1);
-   f->Mult(x_2, N_2);
-   x_1.operator*=(4.0/3.0);
-   add(x_1,4.0/3.0*dt,N_1,z);
-   z.Add(-1.0/3.0,x_2);
-   z.Add(-2.0/3.0*dt,N_2);
-   x=z;
+   if (beta1) { f->AddMult(x_old, z, beta1*dt); }
+   if (alpha1) { z.Add(alpha1, x_old); }
+   x_old = x;
+
+   f->AddMult(x, z, beta0*dt);
+   z.Add(alpha0, x);
+   z*= 1.0 / gamma0;
+
+   x = z;
    t += dt;
 }
 
