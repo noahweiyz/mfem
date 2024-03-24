@@ -197,7 +197,7 @@ int main(int argc, char *argv[])
          sol_ofs << uk;
       }
    }
-   
+
 
    // 6. Set up the nonlinear form with euler flux and numerical flux
    InEulerFlux flux(dim);
@@ -228,7 +228,7 @@ int main(int argc, char *argv[])
          sout << "solution\n" << mesh << mom;
          sout << "view 0 0\n";  // view from top
          sout << "keys jlm\n";  // turn off perspective and light
-         sout << "pause\n";
+         //  sout << "pause\n";
          sout << flush;
          cout << "GLVis visualization paused."
               << " Press space (in the GLVis window) to resume it.\n";
@@ -276,53 +276,53 @@ int main(int argc, char *argv[])
       ode_solver->Step(mom, t, dt_real);
       /////////////////////////////////////////////////////////////////////////////
 
-   // 5. Set up the linear form b(.) which corresponds to the right-hand side of
-   //    the FEM linear system.
-   LinearForm *b = new LinearForm(&fes);
-   DivergenceGridFunctionCoefficient DIV(&mom);
-   ConstantCoefficient m(-gamma/dt);
-   ProductCoefficient RHS(m,DIV);
-   b->AddDomainIntegrator(new DomainLFIntegrator(RHS));
-   b->Assemble();
+      // 5. Set up the linear form b(.) which corresponds to the right-hand side of
+      //    the FEM linear system.
+      LinearForm *b = new LinearForm(&fes);
+      DivergenceGridFunctionCoefficient DIV(&mom);
+      ConstantCoefficient m(-gamma/dt);
+      ProductCoefficient RHS(m,DIV);
+      b->AddDomainIntegrator(new DomainLFIntegrator(RHS));
+      b->Assemble();
 
-   // 6. Define the solution vector x as a finite element grid function
-   //    corresponding to fespace. Initialize x with initial guess of zero.
-   p = 0.0;
+      // 6. Define the solution vector x as a finite element grid function
+      //    corresponding to fespace. Initialize x with initial guess of zero.
+      p = 0.0;
 
-   // 7. Set up the bilinear form a(.,.) on the finite element space
-   //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
-   //    domain integrator and the interior and boundary DG face integrators.
-   //    Note that boundary conditions are imposed weakly in the form, so there
-   //    is no need for dof elimination. After assembly and finalizing we
-   //    extract the corresponding sparse matrix A.
-   BilinearForm *a = new BilinearForm(&fes);
-   ConstantCoefficient one(1.0);
-   a->AddDomainIntegrator(new DiffusionIntegrator(one));
-   a->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-   a->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-   a->Assemble();
-   a->Finalize();
-   const SparseMatrix &A = a->SpMat();
+      // 7. Set up the bilinear form a(.,.) on the finite element space
+      //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
+      //    domain integrator and the interior and boundary DG face integrators.
+      //    Note that boundary conditions are imposed weakly in the form, so there
+      //    is no need for dof elimination. After assembly and finalizing we
+      //    extract the corresponding sparse matrix A.
+      BilinearForm *a = new BilinearForm(&fes);
+      ConstantCoefficient one(1.0);
+      a->AddDomainIntegrator(new DiffusionIntegrator(one));
+      a->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+      a->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+      a->Assemble();
+      a->Finalize();
+      const SparseMatrix &A = a->SpMat();
 
 #ifndef MFEM_USE_SUITESPARSE
-   // 8. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-   //    solve the system Ax=b with PCG in the symmetric case, and GMRES in the
-   //    non-symmetric one.
-   GSSmoother M(A);
-   if (sigma == -1.0)
-   {
-      PCG(A, M, *b, p, 1, 500, 1e-12, 0.0);
-   }
-   else
-   {
-      GMRES(A, M, *b, p, 1, 500, 10, 1e-12, 0.0);
-   }
+      // 8. Define a simple symmetric Gauss-Seidel preconditioner and use it to
+      //    solve the system Ax=b with PCG in the symmetric case, and GMRES in the
+      //    non-symmetric one.
+      GSSmoother M(A);
+      if (sigma == -1.0)
+      {
+         PCG(A, M, *b, p, 1, 500, 1e-12, 0.0);
+      }
+      else
+      {
+         GMRES(A, M, *b, p, 1, 500, 10, 1e-12, 0.0);
+      }
 #else
-   // 8. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-   UMFPackSolver umf_solver;
-   umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-   umf_solver.SetOperator(A);
-   umf_solver.Mult(*b, x);
+      // 8. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
+      UMFPackSolver umf_solver;
+      umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
+      umf_solver.SetOperator(A);
+      umf_solver.Mult(*b, x);
 #endif
 
       if (cfl > 0) // update time step size with CFL

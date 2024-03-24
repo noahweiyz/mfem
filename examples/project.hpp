@@ -86,7 +86,7 @@ public:
     * spatial dimension
     *
     * @param dim spatial dimension
-   
+
     */
    InEulerFlux(const int dim)
       : FluxFunction(dim, dim) {}
@@ -399,8 +399,8 @@ VectorFunctionCoefficient EulerInitialCondition(const int problem,
 }
 
 double InEulerFlux::ComputeFlux(const Vector &U,
-                              ElementTransformation &Tr,
-                              DenseMatrix &FU) const
+                                ElementTransformation &Tr,
+                                DenseMatrix &FU) const
 {
 
    // 2. Compute Flux
@@ -422,9 +422,9 @@ double InEulerFlux::ComputeFlux(const Vector &U,
 
 
 double InEulerFlux::ComputeFluxDotN(const Vector &x,
-                                  const Vector &normal,
-                                  FaceElementTransformations &Tr,
-                                  Vector &FUdotN) const
+                                    const Vector &normal,
+                                    FaceElementTransformations &Tr,
+                                    Vector &FUdotN) const
 {
 
 
