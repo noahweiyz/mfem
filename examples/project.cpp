@@ -142,18 +142,11 @@ int main(int argc, char *argv[])
 
    // 3. Define the ODE solver used for time integration. Several explicit
    //    Runge-Kutta methods are available.
+   ODESolver *ode_solver_0 = NULL;
    ODESolver *ode_solver = NULL;
-   switch (ode_solver_type)
-   {
-      case 1: ode_solver = new ForwardEulerSolver; break;
-      case 2: ode_solver = new RK2Solver(1.0); break;
-      case 3: ode_solver = new RK3SSPSolver; break;
-      case 4: ode_solver = new RK4Solver; break;
-      case 6: ode_solver = new RK6Solver; break;
-      default:
-         cout << "Unknown ODE solver type: " << ode_solver_type << '\n';
-         return 3;
-   }
+   ode_solver_0 = new ForwardEulerSolver;
+   ode_solver = new RK4Solver;
+   
 
    // 4. Define the discontinuous DG finite element space of the given
    //    polynomial order on the refined mesh.
@@ -177,6 +170,7 @@ int main(int argc, char *argv[])
                                                         gas_constant);
    GridFunction mom(&dfes);
    GridFunction p(&fes);
+   GridFunction p_grad(&dfes);
    mom.ProjectCoefficient(u0);
    p = 0.0;
 
@@ -216,6 +210,9 @@ int main(int argc, char *argv[])
    ConstantCoefficient m(-gamma/dt);
    ProductCoefficient pressure_rhs(m,divu);
    b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
+
+   GradientGridFunctionCoefficient grad_p(&p);
+   p_grad.ProjectCoefficient(grad_p);
 
    // Define -Δ operator
    BilinearForm *a = new BilinearForm(&fes);
@@ -293,6 +290,7 @@ int main(int argc, char *argv[])
    double t = 0.0;
    euler.SetTime(t);
    ode_solver->Init(euler);
+   ode_solver_0->Init(euler);
 
    // Integrate in time.
    bool done = false;
@@ -300,7 +298,14 @@ int main(int argc, char *argv[])
    {
       double dt_real = min(dt, t_final - t);
       // advection step
-      ode_solver->Step(mom, t, dt_real);
+
+      if (ti == 0){
+         ode_solver_0 ->Step(mom, t, dt_real);
+      }
+      else {
+         ode_solver ->Step(mom, t, dt_real);
+      }
+      
 
       /////////////////////////////////////////////////////////////////////////////
       // pressure projection
@@ -314,6 +319,8 @@ int main(int argc, char *argv[])
 
       // Finalize solution
       // Get u^n+1
+
+      mom.Add(-dt/gamma,p_grad);
 
 
       if (cfl > 0) // update time step size with CFL
