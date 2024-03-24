@@ -73,7 +73,7 @@ int main(int argc, char *argv[])
    int ref_levels = 1;
    int order = 3;
    int ode_solver_type = 4;
-   double t_final = 2.0;
+   double t_final = 6.0;
    double dt = -0.01;
    double cfl = 0.3;
    bool visualization = true;
@@ -313,6 +313,7 @@ int main(int argc, char *argv[])
          ode_solver_0 ->Step(mom, t, dt_real);
          /////////////////////////////////////////////////////////////////////////////
          // pressure projection
+         b_0->Update();
          b_0->Assemble();
          a->Update();
          a->Assemble();
@@ -320,6 +321,8 @@ int main(int argc, char *argv[])
          const SparseMatrix &A = a->SpMat();
          prec.SetOperator(A);
          prec2.SetSolver(prec);
+         prec2.SetOperator(A);
+         prec2.Mult(*b_0,p);
          PCG(A, prec2, *b_0, p, 1, 500, 1e-12, 0.0);
          p -= M.InnerProduct(p, one_gf);
 
@@ -336,6 +339,7 @@ int main(int argc, char *argv[])
          ode_solver ->Step(mom, t, dt_real);
          /////////////////////////////////////////////////////////////////////////////
          // pressure projection
+         b->Update();
          b->Assemble();
          a->Update();
          a->Assemble();
@@ -343,6 +347,8 @@ int main(int argc, char *argv[])
          const SparseMatrix &A = a->SpMat();
          prec.SetOperator(A);
          prec2.SetSolver(prec);
+         prec2.SetOperator(A);
+         prec2.Mult(*b,p);
          PCG(A, prec2, *b, p, 1, 500, 1e-12, 0.0);
          p -= M.InnerProduct(p, one_gf);
          
