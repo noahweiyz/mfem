@@ -64,7 +64,7 @@ int main(int argc, char *argv[])
    const double specific_heat_ratio = 1.4;
    const double gas_constant = 1.0;
 
-   double sigma = -1.0;
+   const double sigma = -1.0;
    double kappa = -1.0;
    double eta = 0.0;
 
@@ -178,6 +178,7 @@ int main(int argc, char *argv[])
    GridFunction mom(&dfes);
    GridFunction p(&fes);
    mom.ProjectCoefficient(u0);
+   p = 0.0;
 
    // Output the initial solution.
    {
@@ -206,6 +207,33 @@ int main(int argc, char *argv[])
       dfes, std::unique_ptr<HyperbolicFormIntegrator>(
          new HyperbolicFormIntegrator(numericalFlux, IntOrderOffset)),
       preassembleWeakDiv);
+
+
+   // Define pressuer pressure_rhs
+   const double gamma=1.0;
+   LinearForm *b = new LinearForm(&fes);
+   DivergenceGridFunctionCoefficient divu(&mom);
+   ConstantCoefficient m(-gamma/dt);
+   ProductCoefficient pressure_rhs(m,divu);
+   b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
+
+   // Define -Δ operator
+   BilinearForm *a = new BilinearForm(&fes);
+   ConstantCoefficient one(1.0);
+   a->AddDomainIntegrator(new DiffusionIntegrator(one));
+   a->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+   a->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+   GSSmoother prec;
+
+   BilinearForm M(&fes);
+   M.AddDomainIntegrator(new MassIntegrator);
+   M.Assemble();
+   GridFunction one_gf(p);
+   one_gf = 1.0;
+      
+    //   p -= M.InnerProduct(p, one_gf);
+    //   ConstrainedSolver
+    //   MINRESSolver()
 
    // 7. Visualize momentum with its magnitude
    socketstream sout;
@@ -270,60 +298,23 @@ int main(int argc, char *argv[])
    bool done = false;
    for (int ti = 0; !done;)
    {
-      double gamma=0;
       double dt_real = min(dt, t_final - t);
-
+      // advection step
       ode_solver->Step(mom, t, dt_real);
+
       /////////////////////////////////////////////////////////////////////////////
-
-      // 5. Set up the linear form b(.) which corresponds to the right-hand side of
-      //    the FEM linear system.
-      LinearForm *b = new LinearForm(&fes);
-      DivergenceGridFunctionCoefficient DIV(&mom);
-      ConstantCoefficient m(-gamma/dt);
-      ProductCoefficient RHS(m,DIV);
-      b->AddDomainIntegrator(new DomainLFIntegrator(RHS));
+      // pressure projection
       b->Assemble();
-
-      // 6. Define the solution vector x as a finite element grid function
-      //    corresponding to fespace. Initialize x with initial guess of zero.
-      p = 0.0;
-
-      // 7. Set up the bilinear form a(.,.) on the finite element space
-      //    corresponding to the Laplacian operator -Delta, by adding the Diffusion
-      //    domain integrator and the interior and boundary DG face integrators.
-      //    Note that boundary conditions are imposed weakly in the form, so there
-      //    is no need for dof elimination. After assembly and finalizing we
-      //    extract the corresponding sparse matrix A.
-      BilinearForm *a = new BilinearForm(&fes);
-      ConstantCoefficient one(1.0);
-      a->AddDomainIntegrator(new DiffusionIntegrator(one));
-      a->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-      a->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+      a->Update();
       a->Assemble();
       a->Finalize();
       const SparseMatrix &A = a->SpMat();
+      prec.SetOperator(A);
+      PCG(A, prec, *b, p, 1, 500, 1e-12, 0.0);
 
-#ifndef MFEM_USE_SUITESPARSE
-      // 8. Define a simple symmetric Gauss-Seidel preconditioner and use it to
-      //    solve the system Ax=b with PCG in the symmetric case, and GMRES in the
-      //    non-symmetric one.
-      GSSmoother M(A);
-      if (sigma == -1.0)
-      {
-         PCG(A, M, *b, p, 1, 500, 1e-12, 0.0);
-      }
-      else
-      {
-         GMRES(A, M, *b, p, 1, 500, 10, 1e-12, 0.0);
-      }
-#else
-      // 8. If MFEM was compiled with SuiteSparse, use UMFPACK to solve the system.
-      UMFPackSolver umf_solver;
-      umf_solver.Control[UMFPACK_ORDERING] = UMFPACK_ORDERING_METIS;
-      umf_solver.SetOperator(A);
-      umf_solver.Mult(*b, x);
-#endif
+      // Finalize solution
+      // Get u^n+1
+
 
       if (cfl > 0) // update time step size with CFL
       {
@@ -373,6 +364,8 @@ int main(int argc, char *argv[])
 
    // Free the used memory.
    delete ode_solver;
+   delete b;
+   delete a;
 
    return 0;
 }
