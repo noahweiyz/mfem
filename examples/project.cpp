@@ -209,13 +209,14 @@ int main(int argc, char *argv[])
    const double gamma_0=1.0;
    LinearForm *b_0 = new LinearForm(&fes);
    DivergenceGridFunctionCoefficient divu(&mom);
-   ConstantCoefficient m(-gamma_0/dt);
-   ProductCoefficient pressure_rhs(m,divu);
+   ConstantCoefficient m_0(-gamma_0/dt);
+   ProductCoefficient pressure_rhs(m_0,divu);
    b_0->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
 
    // Define pressuer pressure_rhs
    const double gamma=1.5;
    LinearForm *b = new LinearForm(&fes);
+   ConstantCoefficient m(-gamma/dt);
    b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
 
    GradientGridFunctionCoefficient grad_p(&p);
