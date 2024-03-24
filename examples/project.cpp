@@ -228,6 +228,7 @@ int main(int argc, char *argv[])
    a->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
    a->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
    GSSmoother prec;
+   OrthoSolver prec2;
 
    BilinearForm M(&fes);
    M.AddDomainIntegrator(new MassIntegrator);
@@ -318,7 +319,8 @@ int main(int argc, char *argv[])
          a->Finalize();
          const SparseMatrix &A = a->SpMat();
          prec.SetOperator(A);
-         PCG(A, prec, *b_0, p, 1, 500, 1e-12, 0.0);
+         prec2.SetSolver(prec);
+         PCG(A, prec2, *b_0, p, 1, 500, 1e-12, 0.0);
          p -= M.InnerProduct(p, one_gf);
 
          // Finalize solution
@@ -340,7 +342,8 @@ int main(int argc, char *argv[])
          a->Finalize();
          const SparseMatrix &A = a->SpMat();
          prec.SetOperator(A);
-         PCG(A, prec, *b, p, 1, 500, 1e-12, 0.0);
+         prec2.SetSolver(prec);
+         PCG(A, prec2, *b, p, 1, 500, 1e-12, 0.0);
          p -= M.InnerProduct(p, one_gf);
          
          // Finalize solution

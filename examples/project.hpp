@@ -336,7 +336,7 @@ std::function<void(const Vector&, Vector&)> GetMovingVortexInit(
    {
       MFEM_ASSERT(x.Size() == 2, "");
 
-      const double xc = 0.0, yc = 0.0;
+      const double xc = 0.25, yc = 0.25;
 
       // Nice units
       const double vel_inf = 1.;
@@ -348,9 +348,13 @@ std::function<void(const Vector&, Vector&)> GetMovingVortexInit(
       const double temp_inf = pres_inf / (den_inf * gas_constant);
 
       double r2rad = 0.0;
+      double r2rad2= 0.0;
       r2rad += (x(0) - xc) * (x(0) - xc);
       r2rad += (x(1) - yc) * (x(1) - yc);
       r2rad /= (radius * radius);
+      r2rad2 += (x(0) + xc) * (x(0) + xc);
+      r2rad2 += (x(1) + yc) * (x(1) + yc);
+      r2rad2 /= (radius * radius);
 
       const double shrinv1 = 1.0 / (specific_heat_ratio - 1.);
 
@@ -370,8 +374,8 @@ std::function<void(const Vector&, Vector&)> GetMovingVortexInit(
       const double pres = den * gas_constant * temp;
       const double energy = shrinv1 * pres / den + 0.5 * vel2;
 
-      y(0) = velX;
-      y(1) = velY;
+      y(0) = -(x(1)-0.5)*exp(-0.5*r2rad)+(x(1)+0.5)*exp(-0.5*r2rad2);
+      y(1) = (x(0)-0.5)*exp(-0.5*r2rad)-(x(0)+0.5)*exp(-0.5*r2rad2);
    };
 }
 
@@ -401,7 +405,7 @@ VectorFunctionCoefficient EulerInitialCondition(const int problem,
    {
       case 1: // fast moving vortex
          return VectorFunctionCoefficient(
-                   4, GetMovingVortexInit(0.2, 0.5, 1. / 5., gas_constant,
+                   4, GetMovingVortexInit(0.1, 0.5, 1. / 5., gas_constant,
                                           specific_heat_ratio));
       case 2: // slow moving vortex
          return VectorFunctionCoefficient(
