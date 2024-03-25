@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
    int problem = 1;
    const double specific_heat_ratio = 1.4;
    const double gas_constant = 1.0;
-   const double nu=0.1;
+   const double nu=0.001;
 
    const double sigma = -1.0;
    double kappa = -1.0;
@@ -74,7 +74,7 @@ int main(int argc, char *argv[])
    int ref_levels = 1;
    int order = 3;
    int ode_solver_type = 4;
-   double t_final = 6.0;
+   double t_final = 100.0;
    double dt = -0.01;
    double cfl = 0.3;
    bool visualization = true;
@@ -228,18 +228,14 @@ int main(int argc, char *argv[])
    // Define pressuer helm_x_rhs
    ConstantCoefficient one_2(gamma/nu/dt);
    LinearForm *b_3 = new LinearForm(&fes);
-   GradientGridFunctionCoefficient gradcu_x(&mom_x);
-   gradu_x.ProjectCoefficient(gradcu_x);
-   DivergenceGridFunctionCoefficient divgradu_x(&gradu_x);
-   ProductCoefficient helm_x_rhs(one_2,divgradu_x);
+   GridFunctionCoefficient cu_x(&mom_x);
+   ProductCoefficient helm_x_rhs(one_2,cu_x);
    b_3->AddDomainIntegrator(new DomainLFIntegrator(helm_x_rhs));
 
    // Define pressuer helm_y_rhs
    LinearForm *b_4 = new LinearForm(&fes);
-   GradientGridFunctionCoefficient gradcu_y(&mom_y);
-   gradu_y.ProjectCoefficient(gradcu_y);
-   DivergenceGridFunctionCoefficient divgradu_y(&gradu_y);
-   ProductCoefficient helm_y_rhs(one_2,divgradu_y);
+   GridFunctionCoefficient cu_y(&mom_y);
+   ProductCoefficient helm_y_rhs(one_2,cu_y);
    b_4->AddDomainIntegrator(new DomainLFIntegrator(helm_y_rhs));
 
    GradientGridFunctionCoefficient grad_p(&p);
@@ -375,24 +371,35 @@ int main(int argc, char *argv[])
          // Get u^n+1
          mom.Add(-dt,p_grad);
 
-         gradu_x.ProjectCoefficient(gradcu_x);
-         gradu_y.ProjectCoefficient(gradcu_y);
+         //viscous step
 
          one_2.constant=gamma/nu/dt;
 
-         ah->Update();
+         //BilinearForm *ah = new BilinearForm(&fes);
+         ah->AddDomainIntegrator(new DiffusionIntegrator(one));
+         ah->AddDomainIntegrator(new MassIntegrator(one_2));
+         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+
+         //ah->Update();
          ah->Assemble();
-         ah->Finalize();
+         //ah->Finalize();
          SparseMatrix &Ah = ah->SpMat();
          prec3.SetOperator(Ah);
 
-         b_3->Update();
+         GridFunctionCoefficient cu_x(&mom_x);
+         ProductCoefficient helm_x_rhs(one_2,cu_x);
+         b_3->AddDomainIntegrator(new DomainLFIntegrator(helm_x_rhs));
+         //b_3->Update();
          b_3->Assemble();
-         //PCG(Ah, prec3, *b_3, mom_x, 1, 500, 1e-12, 0.0);
+         PCG(Ah, prec3, *b_3, mom_x, 1, 500, 1e-12, 0.0);
 
-         b_4->Update();
+         GridFunctionCoefficient cu_y(&mom_y);
+         ProductCoefficient helm_y_rhs(one_2,cu_y);
+         b_4->AddDomainIntegrator(new DomainLFIntegrator(helm_y_rhs));
+         //b_4->Update();
          b_4->Assemble();
-         //PCG(Ah, prec3, *b_4, mom_y, 1, 500, 1e-12, 0.0);
+         PCG(Ah, prec3, *b_4, mom_y, 1, 500, 1e-12, 0.0);
 
          mom_2=mom;
          
@@ -423,27 +430,38 @@ int main(int argc, char *argv[])
          
          mom.Add(-dt/gamma,p_grad);
 
-         gradu_x.ProjectCoefficient(gradcu_x);
-         gradu_y.ProjectCoefficient(gradcu_y);
 
          one_2.constant=gamma/nu/dt;
 
-         ah->Update();
+         //BilinearForm *ah = new BilinearForm(&fes);
+         ah->AddDomainIntegrator(new DiffusionIntegrator(one));
+         ah->AddDomainIntegrator(new MassIntegrator(one_2));
+         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+
+         //ah->Update();
          ah->Assemble();
-         ah->Finalize();
+         //ah->Finalize();
          SparseMatrix &Ah = ah->SpMat();
          prec3.SetOperator(Ah);
 
-         b_3->Update();
+         GridFunctionCoefficient cu_x(&mom_x);
+         ProductCoefficient helm_x_rhs(one_2,cu_x);
+         b_3->AddDomainIntegrator(new DomainLFIntegrator(helm_x_rhs));
+         //b_3->Update();
          b_3->Assemble();
          PCG(Ah, prec3, *b_3, mom_x, 1, 500, 1e-12, 0.0);
 
-         b_4->Update();
+         GridFunctionCoefficient cu_y(&mom_y);
+         ProductCoefficient helm_y_rhs(one_2,cu_y);
+         b_4->AddDomainIntegrator(new DomainLFIntegrator(helm_y_rhs));
+         //b_4->Update();
          b_4->Assemble();
          PCG(Ah, prec3, *b_4, mom_y, 1, 500, 1e-12, 0.0);
 
          mom_1=mom_2;
          mom_2=mom;
+
       }
 
       if (cfl > 0) // update time step size with CFL
