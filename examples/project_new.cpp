@@ -355,7 +355,7 @@ int main(int argc, char *argv[])
          /////////////////////////////////////////////////////////////////////////////
          // pressure projection
 
-         m.constant=-gamma/dt;
+         m_0.constant=-gamma_0/dt;
 
          b_0->Update();
          b_0->Assemble();
