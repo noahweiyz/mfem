@@ -400,8 +400,10 @@ std::function<void(const Vector&, Vector&)> GetMovingVortexInit(
       const double pres = den * gas_constant * temp;
       const double energy = shrinv1 * pres / den + 0.5 * vel2;
 
-      y(0) = -(x(1)-0.5)*exp(-0.5*r2rad)-(x(1)+0.5)*exp(-0.5*r2rad2);
-      y(1) = (x(0)-0.5)*exp(-0.5*r2rad)+(x(0)+0.5)*exp(-0.5*r2rad2);
+      //y(0) = -(x(1)-0.5)*exp(-0.5*r2rad)-(x(1)+0.5)*exp(-0.5*r2rad2);
+      //y(1) = (x(0)-0.5)*exp(-0.5*r2rad)+(x(0)+0.5)*exp(-0.5*r2rad2);
+      y(0)=sin(x(0)/M_PI)*cos(x(1)/M_PI);
+      y(1)=-cos(x(0)/M_PI)*sin(x(1)/M_PI);
    };
 }
 

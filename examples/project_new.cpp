@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
    int problem = 1;
    const double specific_heat_ratio = 1.4;
    const double gas_constant = 1.0;
-   const double nu=0.001;
+   const double nu=0.0001;
 
    const double sigma = -1.0;
    double kappa = -1.0;
@@ -79,7 +79,7 @@ int main(int argc, char *argv[])
    double cfl = 0.3;
    bool visualization = true;
    bool preassembleWeakDiv = true;
-   int vis_steps = 50;
+   int vis_steps = 1;
 
    int precision = 8;
    cout.precision(precision);
@@ -360,7 +360,7 @@ int main(int argc, char *argv[])
          b_0->Update();
          b_0->Assemble();
          prec2.Mult(*b_0,p);
-         PCG(A, prec2, *b_0, p, 1, 500, 1e-12, 0.0);
+         PCG(A, prec2, *b_0, p, 1, 1000, 1e-12, 0.0);
          //csolver.Mult(*b_0,p);
          
          p -= M.InnerProduct(p, one_gf);
@@ -417,7 +417,7 @@ int main(int argc, char *argv[])
          b->Assemble();
          
          prec2.Mult(*b,p);
-         PCG(A, prec2, *b, p, 1, 500, 1e-12, 0.0);
+         PCG(A, prec2, *b, p, 1, 1000, 1e-12, 0.0);
          //csolver.Mult(*b,p);
 
 
