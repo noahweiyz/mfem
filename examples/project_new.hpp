@@ -402,8 +402,8 @@ std::function<void(const Vector&, Vector&)> GetMovingVortexInit(
 
       //y(0) = -(x(1)-0.5)*exp(-0.5*r2rad)-(x(1)+0.5)*exp(-0.5*r2rad2);
       //y(1) = (x(0)-0.5)*exp(-0.5*r2rad)+(x(0)+0.5)*exp(-0.5*r2rad2);
-      y(0)=sin(x(0)/M_PI)*cos(x(1)/M_PI);
-      y(1)=-cos(x(0)/M_PI)*sin(x(1)/M_PI);
+      y(0)=1.0*M_PI*sin(1.0*x(0)*M_PI)*cos(1.0*x(1)*M_PI);
+      y(1)=-1.0*M_PI*cos(1.0*x(0)*M_PI)*sin(1.0*x(1)*M_PI);
    };
 }
 

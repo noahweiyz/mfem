@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
    int problem = 1;
    const double specific_heat_ratio = 1.4;
    const double gas_constant = 1.0;
-   const double nu=0.0001;
+   const double nu=0.0000001;
 
    const double sigma = -1.0;
    double kappa = -1.0;
@@ -74,7 +74,7 @@ int main(int argc, char *argv[])
    int ref_levels = 1;
    int order = 3;
    int ode_solver_type = 4;
-   double t_final = 100.0;
+   double t_final = 2.0;
    double dt = -0.01;
    double cfl = 0.3;
    bool visualization = true;
@@ -375,29 +375,24 @@ int main(int argc, char *argv[])
 
          one_2.constant=gamma/nu/dt;
 
-         //BilinearForm *ah = new BilinearForm(&fes);
          ah->AddDomainIntegrator(new DiffusionIntegrator(one));
          ah->AddDomainIntegrator(new MassIntegrator(one_2));
          ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
          ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
 
-         //ah->Update();
          ah->Assemble();
-         //ah->Finalize();
          SparseMatrix &Ah = ah->SpMat();
          prec3.SetOperator(Ah);
 
          GridFunctionCoefficient cu_x(&mom_x);
          ProductCoefficient helm_x_rhs(one_2,cu_x);
          b_3->AddDomainIntegrator(new DomainLFIntegrator(helm_x_rhs));
-         //b_3->Update();
          b_3->Assemble();
          PCG(Ah, prec3, *b_3, mom_x, 1, 500, 1e-12, 0.0);
 
          GridFunctionCoefficient cu_y(&mom_y);
          ProductCoefficient helm_y_rhs(one_2,cu_y);
          b_4->AddDomainIntegrator(new DomainLFIntegrator(helm_y_rhs));
-         //b_4->Update();
          b_4->Assemble();
          PCG(Ah, prec3, *b_4, mom_y, 1, 500, 1e-12, 0.0);
 
@@ -433,29 +428,24 @@ int main(int argc, char *argv[])
 
          one_2.constant=gamma/nu/dt;
 
-         //BilinearForm *ah = new BilinearForm(&fes);
          ah->AddDomainIntegrator(new DiffusionIntegrator(one));
          ah->AddDomainIntegrator(new MassIntegrator(one_2));
          ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
          ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
 
-         //ah->Update();
          ah->Assemble();
-         //ah->Finalize();
          SparseMatrix &Ah = ah->SpMat();
          prec3.SetOperator(Ah);
 
          GridFunctionCoefficient cu_x(&mom_x);
          ProductCoefficient helm_x_rhs(one_2,cu_x);
          b_3->AddDomainIntegrator(new DomainLFIntegrator(helm_x_rhs));
-         //b_3->Update();
          b_3->Assemble();
          PCG(Ah, prec3, *b_3, mom_x, 1, 500, 1e-12, 0.0);
 
          GridFunctionCoefficient cu_y(&mom_y);
          ProductCoefficient helm_y_rhs(one_2,cu_y);
          b_4->AddDomainIntegrator(new DomainLFIntegrator(helm_y_rhs));
-         //b_4->Update();
          b_4->Assemble();
          PCG(Ah, prec3, *b_4, mom_y, 1, 500, 1e-12, 0.0);
 
