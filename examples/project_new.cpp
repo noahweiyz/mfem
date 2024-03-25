@@ -63,7 +63,7 @@ int main(int argc, char *argv[])
    int problem = 1;
    const double specific_heat_ratio = 1.4;
    const double gas_constant = 1.0;
-   const double nu=0.0000001;
+   const double nu=0.0;
 
    const double sigma = -1.0;
    double kappa = -1.0;
@@ -226,7 +226,7 @@ int main(int argc, char *argv[])
    b->AddDomainIntegrator(new DomainLFIntegrator(pressure_rhs));
 
    // Define pressuer helm_x_rhs
-   ConstantCoefficient one_2(gamma/nu/dt);
+   ConstantCoefficient one_2(gamma);
    LinearForm *b_3 = new LinearForm(&fes);
    GridFunctionCoefficient cu_x(&mom_x);
    ProductCoefficient helm_x_rhs(one_2,cu_x);
@@ -263,10 +263,11 @@ int main(int argc, char *argv[])
 
    // Define -Δ+I operator
    BilinearForm *ah = new BilinearForm(&fes);
-   ah->AddDomainIntegrator(new DiffusionIntegrator(one));
+   ConstantCoefficient one_3(dt*nu);
+   ah->AddDomainIntegrator(new DiffusionIntegrator(one_3));
    ah->AddDomainIntegrator(new MassIntegrator(one_2));
-   ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-   ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+   ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
+   ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
    GSSmoother prec3;
 
 
@@ -373,12 +374,12 @@ int main(int argc, char *argv[])
 
          //viscous step
 
-         one_2.constant=gamma/nu/dt;
+         one_3.constant=nu*dt;
 
-         ah->AddDomainIntegrator(new DiffusionIntegrator(one));
+         ah->AddDomainIntegrator(new DiffusionIntegrator(one_3));
          ah->AddDomainIntegrator(new MassIntegrator(one_2));
-         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
+         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
 
          ah->Assemble();
          SparseMatrix &Ah = ah->SpMat();
@@ -426,12 +427,12 @@ int main(int argc, char *argv[])
          mom.Add(-dt/gamma,p_grad);
 
 
-         one_2.constant=gamma/nu/dt;
+         one_3.constant=nu*dt;
 
-         ah->AddDomainIntegrator(new DiffusionIntegrator(one));
+         ah->AddDomainIntegrator(new DiffusionIntegrator(one_3));
          ah->AddDomainIntegrator(new MassIntegrator(one_2));
-         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
-         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one, sigma, kappa));
+         ah->AddInteriorFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
+         ah->AddBdrFaceIntegrator(new DGDiffusionIntegrator(one_3, sigma, kappa));
 
          ah->Assemble();
          SparseMatrix &Ah = ah->SpMat();
