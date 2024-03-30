@@ -412,17 +412,36 @@ Mesh EulerMesh(const int problem)
    switch (problem)
    {
       case 1:
-      case 2:
-      case 3:
          return Mesh("../data/periodic-square.mesh");
-         break;
+      case 2:
+      {
+         Mesh mesh("../data/periodic-square.mesh");
+         mesh.Transform([](const Vector &x, Vector &y)
+         {
+            y = x;
+            y *= 5.0;
+         });
+         return mesh;
+      }
+      case 3:
+      {
+         Mesh mesh("../data/periodic-square.mesh");
+         mesh.Transform([](const Vector &x, Vector &y)
+         {
+            y = x;
+            y += 1;
+            y *= M_PI;
+         });
+         return mesh;
+      }
       case 4:
          return Mesh("../data/periodic-segment.mesh");
-         break;
       default:
          MFEM_ABORT("Problem Undefined");
    }
 }
+
+inline double square(const double x) { return x * x; }
 
 // Initial condition
 VectorFunctionCoefficient EulerInitialCondition(const int problem,
@@ -435,40 +454,29 @@ VectorFunctionCoefficient EulerInitialCondition(const int problem,
          return VectorFunctionCoefficient(
                    2, GetMovingVortexInit(0.1, 0.5, 1. / 5., gas_constant,
                                           specific_heat_ratio));
-      case 2: // slow moving vortex
+      case 2:
          return VectorFunctionCoefficient(
-                   4, GetMovingVortexInit(0.2, 0.05, 1. / 50., gas_constant,
-                                          specific_heat_ratio));
-      case 3: // moving sine wave
-         return VectorFunctionCoefficient(4, [](const Vector &x, Vector &y)
+                   2, [](const Vector &x, Vector &y)
          {
-            MFEM_ASSERT(x.Size() == 2, "");
-            const double density = 1.0 + 0.2 * sin(M_PI*(x(0) + x(1)));
-            const double velocity_x = 0.7;
-            const double velocity_y = 0.3;
-            const double pressure = 1.0;
-            const double energy =
-               pressure / (1.4 - 1.0) +
-               density * 0.5 * (velocity_x * velocity_x + velocity_y * velocity_y);
-
-            y(0) = density;
-            y(1) = density * velocity_x;
-            y(2) = density * velocity_y;
-            y(3) = energy;
+            const double sigma_sqrd = 1.5;
+            const double height = 1;
+            const double vortex_x = 0.8;
+            const double r1_sqrd = square(x(0) - vortex_x) + square(x(1));
+            const double r2_sqrd = square(x(0) + vortex_x) + square(x(1));
+            const double expval1 = std::exp(-r1_sqrd / sigma_sqrd);
+            const double expval2 = std::exp(-r2_sqrd / sigma_sqrd);
+            y(0) = +height*x(1)*(expval1 + expval2) / sigma_sqrd;
+            y(1) = -height*((x(0) - vortex_x)*expval1 + (x(0) + vortex_x)*expval2) /
+                   sigma_sqrd;
          });
-      case 4:
-         return VectorFunctionCoefficient(3, [](const Vector &x, Vector &y)
+      case 3:
+         return VectorFunctionCoefficient(
+                   2, [](const Vector &x, Vector &y)
          {
-            MFEM_ASSERT(x.Size() == 1, "");
-            const double density = 1.0 + 0.2 * sin(M_PI * 2 * x(0));
-            const double velocity_x = 1.0;
-            const double pressure = 1.0;
-            const double energy =
-               pressure / (1.4 - 1.0) + density * 0.5 * (velocity_x * velocity_x);
-
-            y(0) = density;
-            y(1) = density * velocity_x;
-            y(2) = energy;
+            const double rho = M_PI/15.0;
+            const double delta = 0.05;
+            const double a = delta*std::cos(x(0));
+            const double b = 1.0 / square(std::cosh((x(1)-M_PI_2) / rho)) / rho;
          });
       default:
          MFEM_ABORT("Problem Undefined");
